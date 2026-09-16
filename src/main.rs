@@ -160,6 +160,7 @@ impl SlicerApp {
             y: (image.height().saturating_sub(h)) / 2,
             w,
             h,
+            corners: None,
         };
         self.boxes.push(rect);
         self.selected = Some(self.boxes.len() - 1);
@@ -247,13 +248,33 @@ impl SlicerApp {
             let screen = rect_to_screen(*rect, canvas, scale);
             let selected = self.selected == Some(index);
             let stroke = if selected {
-                Stroke::new(2.5, Color32::YELLOW)
+                Stroke::new(2.5_f32, Color32::YELLOW)
             } else {
-                Stroke::new(2.0, Color32::from_rgb(255, 80, 80))
+                Stroke::new(2.0_f32, Color32::from_rgb(255, 80, 80))
             };
-            painter.rect_stroke(screen, 0.0, stroke, StrokeKind::Outside);
 
-            let badge = Rect::from_min_size(screen.min + Vec2::new(4.0, 4.0), Vec2::new(26.0, 22.0));
+            let points = rect_screen_corners(*rect, canvas, scale);
+            if rect.corners.is_some() {
+                for i in 0..4 {
+                    painter.line_segment([points[i], points[(i + 1) % 4]], stroke);
+                }
+            } else {
+                painter.rect_stroke(screen, 0.0, stroke, StrokeKind::Outside);
+            }
+
+            let badge_origin = points
+                .iter()
+                .copied()
+                .min_by(|a, b| {
+                    a.y.partial_cmp(&b.y)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
+                })
+                .unwrap_or(screen.min);
+            let badge = Rect::from_min_size(
+                badge_origin + Vec2::new(4.0, 4.0),
+                Vec2::new(26.0, 22.0),
+            );
             painter.rect_filled(badge, 4.0, Color32::from_black_alpha(170));
             painter.text(
                 badge.center(),
@@ -264,14 +285,13 @@ impl SlicerApp {
             );
 
             if selected {
-                for point in [
-                    screen.left_top(),
-                    screen.right_top(),
-                    screen.left_bottom(),
-                    screen.right_bottom(),
-                ] {
+                for point in points {
                     painter.circle_filled(point, HANDLE_RADIUS, Color32::YELLOW);
-                    painter.circle_stroke(point, HANDLE_RADIUS, Stroke::new(1.0, Color32::BLACK));
+                    painter.circle_stroke(
+                        point,
+                        HANDLE_RADIUS,
+                        Stroke::new(1.0_f32, Color32::BLACK),
+                    );
                 }
             }
         }
@@ -381,6 +401,25 @@ fn rect_to_screen(rect: PhotoRect, canvas: Rect, scale: f32) -> Rect {
     )
 }
 
+fn rect_screen_corners(rect: PhotoRect, canvas: Rect, scale: f32) -> [Pos2; 4] {
+    if let Some(corners) = rect.corners {
+        corners.map(|[x, y]| {
+            Pos2::new(
+                canvas.left() + x * scale,
+                canvas.top() + y * scale,
+            )
+        })
+    } else {
+        let screen = rect_to_screen(rect, canvas, scale);
+        [
+            screen.left_top(),
+            screen.right_top(),
+            screen.right_bottom(),
+            screen.left_bottom(),
+        ]
+    }
+}
+
 fn apply_drag(
     rect: &mut PhotoRect,
     mode: DragMode,
@@ -428,6 +467,7 @@ fn apply_drag(
     rect.y = top as u32;
     rect.w = (right - left) as u32;
     rect.h = (bottom - top) as u32;
+    rect.corners = None;
 }
 
 fn main() -> eframe::Result {
