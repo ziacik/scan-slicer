@@ -1,7 +1,7 @@
 use image::{DynamicImage, GenericImageView};
 use opencv::{
     core::{self, Mat, Point, Size, Vector},
-    imgproc,
+    geometry, imgproc,
     prelude::*,
 };
 
@@ -111,25 +111,25 @@ fn detect_photos_cv(
     let mut candidates = Vec::new();
 
     for contour in contours {
-        let area = imgproc::contour_area(&contour, false)?.abs();
+        let area = geometry::contour_area(&contour, false)?.abs();
         if area < min_area || area > max_area {
             continue;
         }
 
-        let perimeter = imgproc::arc_length(&contour, true)?;
+        let perimeter = geometry::arc_length(&contour, true)?;
         if perimeter <= 0.0 {
             continue;
         }
 
         let mut approx: Vector<Point> = Vector::new();
-        imgproc::approx_poly_dp(&contour, &mut approx, perimeter * 0.025, true)?;
+        geometry::approx_poly_dp(&contour, &mut approx, perimeter * 0.025, true)?;
 
         // A real photo border should be a roughly rectangular convex shape.
-        if approx.len() != 4 || !imgproc::is_contour_convex(&approx)? {
+        if approx.len() != 4 || !geometry::is_contour_convex(&approx)? {
             continue;
         }
 
-        let rotated = imgproc::min_area_rect(&approx)?;
+        let rotated = geometry::min_area_rect(&approx)?;
         let rw = rotated.size.width.abs() as f64;
         let rh = rotated.size.height.abs() as f64;
         let rect_area = rw * rh;
@@ -143,7 +143,7 @@ fn detect_photos_cv(
             continue;
         }
 
-        let bounds = imgproc::bounding_rect(&approx)?;
+        let bounds = geometry::bounding_rect(&approx)?;
         if bounds.width as f64 > small_w as f64 * 0.95
             || bounds.height as f64 > small_h as f64 * 0.95
         {
