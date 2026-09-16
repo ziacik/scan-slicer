@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+
+    steps:
+      - name: Install system dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed git rust cargo clang opencv pkgconf base-devel
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cargo check
+        run: cargo check --all-targets
+
+      - name: Cargo test
+        run: cargo test
