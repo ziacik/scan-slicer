@@ -1,7 +1,11 @@
 mod ai_detection;
 mod detection;
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::mpsc::{self, Receiver, Sender},
+    thread,
+};
 
 use eframe::egui::{
     self, Color32, ColorImage, CursorIcon, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle,
@@ -29,6 +33,18 @@ struct ActiveDrag {
     start_rect: PhotoRect,
 }
 
+struct DetectionJob {
+    id: u64,
+    image: DynamicImage,
+    threshold: u8,
+    margin: u32,
+}
+
+struct DetectionResult {
+    id: u64,
+    boxes: Vec<PhotoRect>,
+}
+
 struct SlicerApp {
     image: Option<DynamicImage>,
     texture: Option<TextureHandle>,
@@ -39,10 +55,29 @@ struct SlicerApp {
     threshold: u8,
     margin: u32,
     status: String,
+    detection_tx: Sender<DetectionJob>,
+    detection_rx: Receiver<DetectionResult>,
+    detection_id: u64,
+    detecting: bool,
 }
 
-impl Default for SlicerApp {
-    fn default() -> Self {
+impl SlicerApp {
+    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        let (job_tx, job_rx) = mpsc::channel::<DetectionJob>();
+        let (result_tx, result_rx) = mpsc::channel::<DetectionResult>();
+
+        thread::spawn(move || {
+            while let Ok(job) = job_rx.recv() {
+                let boxes = detect_photos(&job.image, job.threshold, job.margin);
+                if result_tx
+                    .send(DetectionResult { id: job.id, boxes })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
         Self {
             image: None,
             texture: None,
@@ -53,13 +88,11 @@ impl Default for SlicerApp {
             threshold: 22,
             margin: 0,
             status: "Open a scan to begin.".into(),
+            detection_tx: job_tx,
+            detection_rx: result_rx,
+            detection_id: 0,
+            detecting: false,
         }
-    }
-}
-
-impl SlicerApp {
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        Self::default()
     }
 
     fn open_image(&mut self, ctx: &egui::Context) {
@@ -92,9 +125,37 @@ impl SlicerApp {
             return;
         };
 
-        self.boxes = detect_photos(image, self.threshold, self.margin);
-        self.selected = None;
-        self.status = format!("Detected {} photo(s).", self.boxes.len());
+        self.detection_id = self.detection_id.wrapping_add(1);
+        let job = DetectionJob {
+            id: self.detection_id,
+            image: image.clone(),
+            threshold: self.threshold,
+            margin: self.margin,
+        };
+
+        match self.detection_tx.send(job) {
+            Ok(()) => {
+                self.detecting = true;
+                self.status = "Detecting photos…".into();
+            }
+            Err(error) => {
+                self.detecting = false;
+                self.status = format!("Could not start detection: {error}");
+            }
+        }
+    }
+
+    fn poll_detection(&mut self) {
+        while let Ok(result) = self.detection_rx.try_recv() {
+            if result.id != self.detection_id {
+                continue;
+            }
+
+            self.boxes = result.boxes;
+            self.selected = None;
+            self.detecting = false;
+            self.status = format!("Detected {} photo(s).", self.boxes.len());
+        }
     }
 
     fn export(&mut self) {
@@ -324,13 +385,21 @@ impl SlicerApp {
 
 impl eframe::App for SlicerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_detection();
+        if self.detecting {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
                 if ui.button("Open scan").clicked() {
                     self.open_image(ctx);
                 }
                 if ui
-                    .add_enabled(self.image.is_some(), egui::Button::new("Detect photos"))
+                    .add_enabled(
+                        self.image.is_some() && !self.detecting,
+                        egui::Button::new("Detect photos"),
+                    )
                     .clicked()
                 {
                     self.redetect();
