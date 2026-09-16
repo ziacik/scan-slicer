@@ -467,8 +467,36 @@ fn make_rectangle_hypotheses(
                 continue;
             }
 
+            // Reject implausibly thin rectangle hypotheses. This mainly removes
+            // accidental combinations of scanner/page edges with one photo edge.
+            let aspect = side_a.min(side_b) / side_a.max(side_b);
+            if aspect < 0.28 {
+                continue;
+            }
+
             let area = side_a * side_b;
             if area < scan_area * 0.006 || area > scan_area * 0.72 {
+                continue;
+            }
+
+            // A rectangle hugging three scanner boundaries is almost certainly
+            // the scan/page frame rather than one of several photos.
+            let min_x = corners.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
+            let min_y = corners.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
+            let max_x = corners
+                .iter()
+                .map(|p| p[0])
+                .fold(f32::NEG_INFINITY, f32::max);
+            let max_y = corners
+                .iter()
+                .map(|p| p[1])
+                .fold(f32::NEG_INFINITY, f32::max);
+            let border = small_w.min(small_h) as f32 * 0.025;
+            let touched_edges = usize::from(min_x <= border)
+                + usize::from(min_y <= border)
+                + usize::from(max_x >= small_w as f32 - border)
+                + usize::from(max_y >= small_h as f32 - border);
+            if touched_edges >= 3 {
                 continue;
             }
 
