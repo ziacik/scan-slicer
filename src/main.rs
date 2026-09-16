@@ -1,3 +1,4 @@
+mod ai_detection;
 mod detection;
 
 use std::path::{Path, PathBuf};
