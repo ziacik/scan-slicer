@@ -54,69 +54,47 @@ fn detect_photos_cv(
     let small_w = ((width as f32 / scale).round() as u32).max(1);
     let small_h = ((height as f32 / scale).round() as u32).max(1);
 
-    let gray_image = image
+    let small = image
         .resize_exact(
             small_w,
             small_h,
             image::imageops::FilterType::Triangle,
         )
-        .to_luma8();
+        .to_rgb8();
 
-    let gray = Mat::new_rows_cols_with_bytes::<u8>(
+    let background = estimate_background(&small);
+    let cutoff = threshold.max(5) as u16 * 3;
+
+    let mut mask_bytes = vec![0u8; (small_w * small_h) as usize];
+    for y in 0..small_h {
+        for x in 0..small_w {
+            let p = small.get_pixel(x, y).0;
+            let distance = p[0].abs_diff(background[0]) as u16
+                + p[1].abs_diff(background[1]) as u16
+                + p[2].abs_diff(background[2]) as u16;
+
+            if distance >= cutoff {
+                mask_bytes[(y * small_w + x) as usize] = 255;
+            }
+        }
+    }
+
+    let mask = Mat::new_rows_cols_with_bytes::<u8>(
         small_h as i32,
         small_w as i32,
-        gray_image.as_raw(),
+        &mask_bytes,
     )?;
 
-    let mut blurred = Mat::default();
-    imgproc::gaussian_blur(
-        &gray,
-        &mut blurred,
-        Size::new(5, 5),
-        0.0,
-        0.0,
-        core::BORDER_DEFAULT,
-        core::AlgorithmHint::ALGO_HINT_DEFAULT,
-    )?;
-
-    let mut candidates = Vec::new();
-
-    // Pass 1: dark filled photo regions on a bright scan background.
-    let cutoff = (255u16.saturating_sub(threshold.max(5) as u16)) as f64;
-    let mut mask = Mat::default();
-    imgproc::threshold(
-        &blurred,
-        &mut mask,
-        cutoff,
-        255.0,
-        imgproc::THRESH_BINARY_INV,
-    )?;
-
-    let open_kernel = imgproc::get_structuring_element(
-        imgproc::MORPH_RECT,
-        Size::new(3, 3),
-        Point::new(-1, -1),
-    )?;
-    let mut opened = Mat::default();
-    imgproc::morphology_ex(
-        &mask,
-        &mut opened,
-        imgproc::MORPH_OPEN,
-        &open_kernel,
-        Point::new(-1, -1),
-        1,
-        core::BORDER_CONSTANT,
-        imgproc::morphology_default_border_value()?,
-    )?;
-
+    // Fill small gaps and scratches inside a photograph, then slightly expand
+    // the foreground so fragmented parts of one photo become one component.
     let close_kernel = imgproc::get_structuring_element(
         imgproc::MORPH_RECT,
-        Size::new(13, 13),
+        Size::new(11, 11),
         Point::new(-1, -1),
     )?;
     let mut closed = Mat::default();
     imgproc::morphology_ex(
-        &opened,
+        &mask,
         &mut closed,
         imgproc::MORPH_CLOSE,
         &close_kernel,
@@ -126,79 +104,27 @@ fn detect_photos_cv(
         imgproc::morphology_default_border_value()?,
     )?;
 
-    collect_candidates(
-        &closed,
-        true,
-        width,
-        height,
-        small_w,
-        small_h,
-        scale,
-        margin,
-        &mut candidates,
-    )?;
-
-    // Pass 2: photo borders/strong edges. This catches pale or faded photos
-    // whose interiors are too bright for the filled-region pass.
-    let low = threshold.max(8) as f64;
-    let high = (low * 3.0).max(70.0);
-    let mut edges = Mat::default();
-    imgproc::canny(&blurred, &mut edges, low, high, 3, true)?;
-
-    let edge_kernel = imgproc::get_structuring_element(
+    let dilate_kernel = imgproc::get_structuring_element(
         imgproc::MORPH_RECT,
-        Size::new(7, 7),
+        Size::new(5, 5),
         Point::new(-1, -1),
     )?;
-    let mut joined_edges = Mat::default();
-    imgproc::morphology_ex(
-        &edges,
-        &mut joined_edges,
-        imgproc::MORPH_CLOSE,
-        &edge_kernel,
+    let mut connected = Mat::default();
+    imgproc::dilate(
+        &closed,
+        &mut connected,
+        &dilate_kernel,
         Point::new(-1, -1),
-        2,
+        1,
         core::BORDER_CONSTANT,
         imgproc::morphology_default_border_value()?,
     )?;
 
-    collect_candidates(
-        &joined_edges,
-        false,
-        width,
-        height,
-        small_w,
-        small_h,
-        scale,
-        margin,
-        &mut candidates,
-    )?;
-
-    candidates.sort_by_key(|r| (r.y / 40, r.x));
-    Ok(candidates)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn collect_candidates(
-    source: &Mat,
-    external_only: bool,
-    width: u32,
-    height: u32,
-    small_w: u32,
-    small_h: u32,
-    scale: f32,
-    margin: u32,
-    candidates: &mut Vec<PhotoRect>,
-) -> opencv::Result<()> {
     let mut contours: Vector<Vector<Point>> = Vector::new();
     imgproc::find_contours(
-        source,
+        &connected,
         &mut contours,
-        if external_only {
-            imgproc::RETR_EXTERNAL
-        } else {
-            imgproc::RETR_LIST
-        },
+        imgproc::RETR_EXTERNAL,
         imgproc::CHAIN_APPROX_SIMPLE,
         Point::new(0, 0),
     )?;
@@ -206,6 +132,8 @@ fn collect_candidates(
     let scan_area = (small_w as f64) * (small_h as f64);
     let min_area = scan_area * 0.006;
     let max_area = scan_area * 0.75;
+
+    let mut candidates = Vec::new();
 
     for contour in contours {
         let area = geometry::contour_area(&contour, false)?.abs();
@@ -231,9 +159,7 @@ fn collect_candidates(
         }
 
         let rect_area = rw as f64 * rh as f64;
-        let fill_ratio = area / rect_area;
-        let min_fill = if external_only { 0.22 } else { 0.05 };
-        if fill_ratio < min_fill {
+        if rect_area <= 0.0 || area / rect_area < 0.18 {
             continue;
         }
 
@@ -263,7 +189,9 @@ fn collect_candidates(
 
         let bbox_w = max_x - min_x;
         let bbox_h = max_y - min_y;
-        if bbox_w > width as f32 * 0.95 || bbox_h > height as f32 * 0.95 {
+
+        // Reject scan-wide/page-edge artefacts like the old bogus "photo 2".
+        if bbox_w > width as f32 * 0.92 || bbox_h > height as f32 * 0.92 {
             continue;
         }
 
@@ -283,7 +211,7 @@ fn collect_candidates(
 
         if candidates
             .iter()
-            .any(|existing| overlap_ratio(*existing, rect) > 0.72)
+            .any(|existing| overlap_ratio(*existing, rect) > 0.80)
         {
             continue;
         }
@@ -291,7 +219,36 @@ fn collect_candidates(
         candidates.push(rect);
     }
 
-    Ok(())
+    candidates.sort_by_key(|r| (r.y / 40, r.x));
+    Ok(candidates)
+}
+
+fn estimate_background(image: &image::RgbImage) -> [u8; 3] {
+    let (w, h) = image.dimensions();
+    let patch = (w.min(h) / 20).clamp(3, 30);
+    let corners = [
+        (0, 0),
+        (w.saturating_sub(patch), 0),
+        (0, h.saturating_sub(patch)),
+        (w.saturating_sub(patch), h.saturating_sub(patch)),
+    ];
+
+    let mut samples = Vec::with_capacity((patch * patch * 4) as usize);
+    for (start_x, start_y) in corners {
+        for y in start_y..(start_y + patch).min(h) {
+            for x in start_x..(start_x + patch).min(w) {
+                samples.push(image.get_pixel(x, y).0);
+            }
+        }
+    }
+
+    let median = |channel: usize| {
+        let mut values = samples.iter().map(|p| p[channel]).collect::<Vec<_>>();
+        values.sort_unstable();
+        values[values.len() / 2]
+    };
+
+    [median(0), median(1), median(2)]
 }
 
 fn rotated_corners(cx: f32, cy: f32, w: f32, h: f32, angle_deg: f32) -> [[f32; 2]; 4] {
