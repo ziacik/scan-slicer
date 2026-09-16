@@ -11,6 +11,7 @@ pub struct PhotoRect {
     pub y: u32,
     pub w: u32,
     pub h: u32,
+    pub corners: Option<[[f32; 2]; 4]>,
 }
 
 impl PhotoRect {
@@ -19,7 +20,13 @@ impl PhotoRect {
         let y = self.y.min(image_h);
         let w = self.w.min(image_w.saturating_sub(x));
         let h = self.h.min(image_h.saturating_sub(y));
-        Self { x, y, w, h }
+        Self {
+            x,
+            y,
+            w,
+            h,
+            corners: self.corners,
+        }
     }
 }
 
@@ -39,11 +46,10 @@ fn detect_photos_cv(
             y: 0,
             w: width,
             h: height,
+            corners: None,
         }]);
     }
 
-    // Detection does not need the full scan resolution. Working around 1600 px
-    // keeps it fast while preserving enough detail for photo borders.
     let scale = (width.max(height) as f32 / 1600.0).max(1.0);
     let small_w = ((width as f32 / scale).round() as u32).max(1);
     let small_h = ((height as f32 / scale).round() as u32).max(1);
@@ -63,32 +69,56 @@ fn detect_photos_cv(
     )?;
 
     let mut blurred = Mat::default();
-    imgproc::blur(
+    imgproc::gaussian_blur(
         &gray,
         &mut blurred,
         Size::new(5, 5),
-        Point::new(-1, -1),
+        0.0,
+        0.0,
         core::BORDER_DEFAULT,
     )?;
 
-    let low = threshold.max(5) as f64;
-    let high = (low * 3.0).max(60.0);
+    // Old photo sheets are usually a bright page with darker photographs.
+    // Detect the dark filled areas instead of requiring a pristine 4-corner border.
+    let cutoff = (255u16.saturating_sub(threshold.max(5) as u16)) as f64;
+    let mut mask = Mat::default();
+    imgproc::threshold(
+        &blurred,
+        &mut mask,
+        cutoff,
+        255.0,
+        imgproc::THRESH_BINARY_INV,
+    )?;
 
-    let mut edges = Mat::default();
-    imgproc::canny(&blurred, &mut edges, low, high, 3, true)?;
-
-    // Join small gaps in otherwise continuous photo borders.
-    let kernel = imgproc::get_structuring_element(
+    // Remove thin scan artefacts, then connect gaps inside a photograph.
+    let open_kernel = imgproc::get_structuring_element(
         imgproc::MORPH_RECT,
-        Size::new(5, 5),
+        Size::new(3, 3),
+        Point::new(-1, -1),
+    )?;
+    let mut opened = Mat::default();
+    imgproc::morphology_ex(
+        &mask,
+        &mut opened,
+        imgproc::MORPH_OPEN,
+        &open_kernel,
+        Point::new(-1, -1),
+        1,
+        core::BORDER_CONSTANT,
+        imgproc::morphology_default_border_value()?,
+    )?;
+
+    let close_kernel = imgproc::get_structuring_element(
+        imgproc::MORPH_RECT,
+        Size::new(13, 13),
         Point::new(-1, -1),
     )?;
     let mut closed = Mat::default();
     imgproc::morphology_ex(
-        &edges,
+        &opened,
         &mut closed,
         imgproc::MORPH_CLOSE,
-        &kernel,
+        &close_kernel,
         Point::new(-1, -1),
         2,
         core::BORDER_CONSTANT,
@@ -99,15 +129,14 @@ fn detect_photos_cv(
     imgproc::find_contours(
         &closed,
         &mut contours,
-        imgproc::RETR_LIST,
+        imgproc::RETR_EXTERNAL,
         imgproc::CHAIN_APPROX_SIMPLE,
         Point::new(0, 0),
     )?;
 
     let scan_area = (small_w as f64) * (small_h as f64);
-    let min_area = scan_area * 0.012;
-    let max_area = scan_area * 0.80;
-
+    let min_area = scan_area * 0.008;
+    let max_area = scan_area * 0.75;
     let mut candidates = Vec::new();
 
     for contour in contours {
@@ -116,61 +145,76 @@ fn detect_photos_cv(
             continue;
         }
 
-        let perimeter = geometry::arc_length(&contour, true)?;
-        if perimeter <= 0.0 {
+        let rotated = geometry::min_area_rect(&contour)?;
+        let rw = rotated.size.width.abs();
+        let rh = rotated.size.height.abs();
+        if rw <= 1.0 || rh <= 1.0 {
             continue;
         }
 
-        let mut approx: Vector<Point> = Vector::new();
-        geometry::approx_poly_dp(&contour, &mut approx, perimeter * 0.025, true)?;
-
-        // A real photo border should be a roughly rectangular convex shape.
-        if approx.len() != 4 || !geometry::is_contour_convex(&approx)? {
+        if rw < small_w as f32 * 0.08 || rh < small_h as f32 * 0.08 {
             continue;
         }
 
-        let rotated = geometry::min_area_rect(&approx)?;
-        let rw = rotated.size.width.abs() as f64;
-        let rh = rotated.size.height.abs() as f64;
-        let rect_area = rw * rh;
-
-        if rw < small_w as f64 * 0.08 || rh < small_h as f64 * 0.08 {
+        let long = rw.max(rh);
+        let short = rw.min(rh);
+        if short / long < 0.22 {
             continue;
         }
 
-        // Reject very non-rectangular contours and thin scan-wide artefacts.
-        if rect_area <= 0.0 || area / rect_area < 0.70 {
+        let rect_area = rw as f64 * rh as f64;
+        if area / rect_area < 0.25 {
             continue;
         }
 
-        let bounds = geometry::bounding_rect(&approx)?;
-        if bounds.width as f64 > small_w as f64 * 0.95
-            || bounds.height as f64 > small_h as f64 * 0.95
-        {
+        let corners_small = rotated_corners(
+            rotated.center.x,
+            rotated.center.y,
+            rw,
+            rh,
+            rotated.angle,
+        );
+
+        let mut min_x = f32::INFINITY;
+        let mut min_y = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
+        let mut corners = [[0.0f32; 2]; 4];
+
+        for (i, p) in corners_small.iter().enumerate() {
+            let x = (p[0] * scale).clamp(0.0, width as f32);
+            let y = (p[1] * scale).clamp(0.0, height as f32);
+            corners[i] = [x, y];
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+
+        let bbox_w = max_x - min_x;
+        let bbox_h = max_y - min_y;
+        if bbox_w > width as f32 * 0.95 || bbox_h > height as f32 * 0.95 {
             continue;
         }
 
-        let mut x = (bounds.x as f32 * scale).floor() as i64 - margin as i64;
-        let mut y = (bounds.y as f32 * scale).floor() as i64 - margin as i64;
-        let mut right =
-            ((bounds.x + bounds.width) as f32 * scale).ceil() as i64 + margin as i64;
-        let mut bottom =
-            ((bounds.y + bounds.height) as f32 * scale).ceil() as i64 + margin as i64;
-
-        x = x.clamp(0, width as i64);
-        y = y.clamp(0, height as i64);
-        right = right.clamp(x, width as i64);
-        bottom = bottom.clamp(y, height as i64);
+        let margin = margin as f32;
+        let x = (min_x - margin).floor().max(0.0) as u32;
+        let y = (min_y - margin).floor().max(0.0) as u32;
+        let right = (max_x + margin).ceil().min(width as f32) as u32;
+        let bottom = (max_y + margin).ceil().min(height as f32) as u32;
 
         let rect = PhotoRect {
-            x: x as u32,
-            y: y as u32,
-            w: (right - x) as u32,
-            h: (bottom - y) as u32,
+            x,
+            y,
+            w: right.saturating_sub(x),
+            h: bottom.saturating_sub(y),
+            corners: Some(corners),
         };
 
-        // findContours can return both sides of the same border. Keep one.
-        if candidates.iter().any(|existing| overlap_ratio(*existing, rect) > 0.85) {
+        if candidates
+            .iter()
+            .any(|existing| overlap_ratio(*existing, rect) > 0.85)
+        {
             continue;
         }
 
@@ -179,6 +223,21 @@ fn detect_photos_cv(
 
     candidates.sort_by_key(|r| (r.y / 40, r.x));
     Ok(candidates)
+}
+
+fn rotated_corners(cx: f32, cy: f32, w: f32, h: f32, angle_deg: f32) -> [[f32; 2]; 4] {
+    let angle = angle_deg.to_radians();
+    let cos = angle.cos();
+    let sin = angle.sin();
+    let hw = w / 2.0;
+    let hh = h / 2.0;
+
+    [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)].map(|(x, y)| {
+        [
+            cx + x * cos - y * sin,
+            cy + x * sin + y * cos,
+        ]
+    })
 }
 
 fn overlap_ratio(a: PhotoRect, b: PhotoRect) -> f32 {
@@ -212,6 +271,7 @@ mod tests {
             y: 80,
             w: 40,
             h: 50,
+            corners: None,
         }
         .clamped(100, 100);
 
@@ -228,12 +288,14 @@ mod tests {
             y: 0,
             w: 100,
             h: 100,
+            corners: None,
         };
         let b = PhotoRect {
             x: 10,
             y: 10,
             w: 80,
             h: 80,
+            corners: None,
         };
 
         assert_eq!(overlap_ratio(a, b), 1.0);
