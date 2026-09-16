@@ -60,19 +60,7 @@ struct Candidate {
 }
 
 pub fn detect_photos(image: &DynamicImage, threshold: u8, margin: u32) -> Vec<PhotoRect> {
-    let classic = detect_photos_cv(image, threshold, margin).unwrap_or_default();
-    if classic.is_empty() {
-        return classic;
-    }
-
-    match crate::ai_detection::refine_photos_ai(image, &classic, margin) {
-        Ok(photos) if !photos.is_empty() => photos,
-        Ok(_) => classic,
-        Err(error) => {
-            eprintln!("MobileSAM refinement failed, using OpenCV candidates: {error:#}");
-            classic
-        }
-    }
+    detect_photos_cv(image, threshold, margin).unwrap_or_default()
 }
 
 fn detect_photos_cv(
