@@ -76,6 +76,7 @@ fn detect_photos_cv(
         0.0,
         0.0,
         core::BORDER_DEFAULT,
+        core::AlgorithmHint::ALGO_HINT_DEFAULT,
     )?;
 
     // Old photo sheets are usually a bright page with darker photographs.
