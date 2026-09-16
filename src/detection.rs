@@ -79,8 +79,9 @@ fn detect_photos_cv(
         core::AlgorithmHint::ALGO_HINT_DEFAULT,
     )?;
 
-    // Old photo sheets are usually a bright page with darker photographs.
-    // Detect the dark filled areas instead of requiring a pristine 4-corner border.
+    let mut candidates = Vec::new();
+
+    // Pass 1: dark filled photo regions on a bright scan background.
     let cutoff = (255u16.saturating_sub(threshold.max(5) as u16)) as f64;
     let mut mask = Mat::default();
     imgproc::threshold(
@@ -91,7 +92,6 @@ fn detect_photos_cv(
         imgproc::THRESH_BINARY_INV,
     )?;
 
-    // Remove thin scan artefacts, then connect gaps inside a photograph.
     let open_kernel = imgproc::get_structuring_element(
         imgproc::MORPH_RECT,
         Size::new(3, 3),
@@ -126,19 +126,86 @@ fn detect_photos_cv(
         imgproc::morphology_default_border_value()?,
     )?;
 
+    collect_candidates(
+        &closed,
+        true,
+        width,
+        height,
+        small_w,
+        small_h,
+        scale,
+        margin,
+        &mut candidates,
+    )?;
+
+    // Pass 2: photo borders/strong edges. This catches pale or faded photos
+    // whose interiors are too bright for the filled-region pass.
+    let low = threshold.max(8) as f64;
+    let high = (low * 3.0).max(70.0);
+    let mut edges = Mat::default();
+    imgproc::canny(&blurred, &mut edges, low, high, 3, true)?;
+
+    let edge_kernel = imgproc::get_structuring_element(
+        imgproc::MORPH_RECT,
+        Size::new(7, 7),
+        Point::new(-1, -1),
+    )?;
+    let mut joined_edges = Mat::default();
+    imgproc::morphology_ex(
+        &edges,
+        &mut joined_edges,
+        imgproc::MORPH_CLOSE,
+        &edge_kernel,
+        Point::new(-1, -1),
+        2,
+        core::BORDER_CONSTANT,
+        imgproc::morphology_default_border_value()?,
+    )?;
+
+    collect_candidates(
+        &joined_edges,
+        false,
+        width,
+        height,
+        small_w,
+        small_h,
+        scale,
+        margin,
+        &mut candidates,
+    )?;
+
+    candidates.sort_by_key(|r| (r.y / 40, r.x));
+    Ok(candidates)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_candidates(
+    source: &Mat,
+    external_only: bool,
+    width: u32,
+    height: u32,
+    small_w: u32,
+    small_h: u32,
+    scale: f32,
+    margin: u32,
+    candidates: &mut Vec<PhotoRect>,
+) -> opencv::Result<()> {
     let mut contours: Vector<Vector<Point>> = Vector::new();
     imgproc::find_contours(
-        &closed,
+        source,
         &mut contours,
-        imgproc::RETR_EXTERNAL,
+        if external_only {
+            imgproc::RETR_EXTERNAL
+        } else {
+            imgproc::RETR_LIST
+        },
         imgproc::CHAIN_APPROX_SIMPLE,
         Point::new(0, 0),
     )?;
 
     let scan_area = (small_w as f64) * (small_h as f64);
-    let min_area = scan_area * 0.008;
+    let min_area = scan_area * 0.006;
     let max_area = scan_area * 0.75;
-    let mut candidates = Vec::new();
 
     for contour in contours {
         let area = geometry::contour_area(&contour, false)?.abs();
@@ -164,7 +231,9 @@ fn detect_photos_cv(
         }
 
         let rect_area = rw as f64 * rh as f64;
-        if area / rect_area < 0.25 {
+        let fill_ratio = area / rect_area;
+        let min_fill = if external_only { 0.22 } else { 0.05 };
+        if fill_ratio < min_fill {
             continue;
         }
 
@@ -214,7 +283,7 @@ fn detect_photos_cv(
 
         if candidates
             .iter()
-            .any(|existing| overlap_ratio(*existing, rect) > 0.85)
+            .any(|existing| overlap_ratio(*existing, rect) > 0.72)
         {
             continue;
         }
@@ -222,8 +291,7 @@ fn detect_photos_cv(
         candidates.push(rect);
     }
 
-    candidates.sort_by_key(|r| (r.y / 40, r.x));
-    Ok(candidates)
+    Ok(())
 }
 
 fn rotated_corners(cx: f32, cy: f32, w: f32, h: f32, angle_deg: f32) -> [[f32; 2]; 4] {
