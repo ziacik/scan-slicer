@@ -232,7 +232,7 @@ impl MobileSamDetector {
                 continue;
             }
 
-            let contains_center = imgproc::point_polygon_test(
+            let contains_center = geometry::point_polygon_test(
                 &contour,
                 opencv::core::Point2f::new(
                     candidate_preview_center[0],
