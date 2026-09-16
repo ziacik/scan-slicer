@@ -50,7 +50,7 @@ impl Default for SlicerApp {
             selected: None,
             drag: None,
             threshold: 22,
-            margin: 24,
+            margin: 0,
             status: "Open a scan to begin.".into(),
         }
     }
