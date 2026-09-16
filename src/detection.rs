@@ -60,7 +60,14 @@ struct Candidate {
 }
 
 pub fn detect_photos(image: &DynamicImage, threshold: u8, margin: u32) -> Vec<PhotoRect> {
-    detect_photos_cv(image, threshold, margin).unwrap_or_default()
+    match crate::ai_detection::detect_photos_ai(image, margin) {
+        Ok(photos) if !photos.is_empty() => photos,
+        Ok(_) => detect_photos_cv(image, threshold, margin).unwrap_or_default(),
+        Err(error) => {
+            eprintln!("MobileSAM detection failed, falling back to OpenCV: {error:#}");
+            detect_photos_cv(image, threshold, margin).unwrap_or_default()
+        }
+    }
 }
 
 fn detect_photos_cv(
@@ -760,7 +767,7 @@ mod tests {
         draw_rotated_rect(&mut image, 195.0, 430.0, 210.0, 255.0, 3.0, Rgb([92, 88, 84]));
         draw_rotated_rect(&mut image, 590.0, 405.0, 235.0, 270.0, -2.0, Rgb([207, 202, 194]));
 
-        let found = detect_photos(&DynamicImage::ImageRgb8(image), 22, 0);
+        let found = detect_photos_cv(&DynamicImage::ImageRgb8(image), 22, 0).unwrap();
         assert_eq!(found.len(), 3, "detected: {found:?}");
     }
 
@@ -772,7 +779,7 @@ mod tests {
         draw_rotated_rect(&mut image, 220.0, 250.0, 270.0, 180.0, 11.0, Rgb([210, 205, 195]));
         draw_rotated_rect(&mut image, 525.0, 270.0, 220.0, 260.0, -7.0, Rgb([50, 55, 65]));
 
-        let found = detect_photos(&DynamicImage::ImageRgb8(image), 22, 0);
+        let found = detect_photos_cv(&DynamicImage::ImageRgb8(image), 22, 0).unwrap();
         assert_eq!(found.len(), 2, "detected: {found:?}");
     }
 
