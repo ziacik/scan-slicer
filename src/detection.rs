@@ -359,7 +359,7 @@ fn make_line(x1: i32, y1: i32, x2: i32, y2: i32) -> Option<DetectedLine> {
 }
 
 fn dedupe_lines(lines: Vec<DetectedLine>) -> Vec<DetectedLine> {
-    let mut kept = Vec::new();
+    let mut kept: Vec<DetectedLine> = Vec::new();
 
     'candidate: for line in lines {
         for other in &kept {
@@ -452,8 +452,8 @@ fn make_rectangle_hypotheses(
             let corners = [p00, p10, p11, p01];
 
             if corners.iter().any(|p| {
-                p[0] < -small_w as f32 * 0.03
-                    || p[1] < -small_h as f32 * 0.03
+                p[0] < -(small_w as f32) * 0.03
+                    || p[1] < -(small_h as f32) * 0.03
                     || p[0] > small_w as f32 * 1.03
                     || p[1] > small_h as f32 * 1.03
             }) {
