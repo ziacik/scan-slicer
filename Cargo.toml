@@ -11,4 +11,4 @@ egui_extras = { version = "0.33", features = ["image"] }
 image = { version = "0.25", features = ["png", "jpeg", "tiff"] }
 rfd = "0.15"
 anyhow = "1"
-opencv = { version = "0.100", default-features = false, features = ["imgproc"] }
+opencv = { version = "0.100", default-features = false, features = ["imgproc", "geometry"] }
