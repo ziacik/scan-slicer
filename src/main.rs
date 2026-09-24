@@ -1,4 +1,5 @@
 mod detection;
+mod openai_detection;
 
 use std::{
     path::{Path, PathBuf},
@@ -42,6 +43,8 @@ struct DetectionJob {
 struct DetectionResult {
     id: u64,
     boxes: Vec<PhotoRect>,
+    engine: &'static str,
+    warning: Option<String>,
 }
 
 struct SlicerApp {
@@ -67,9 +70,14 @@ impl SlicerApp {
 
         thread::spawn(move || {
             while let Ok(job) = job_rx.recv() {
-                let boxes = detect_photos(&job.image, job.threshold, job.margin);
+                let output = detect_photos(&job.image, job.threshold, job.margin);
                 if result_tx
-                    .send(DetectionResult { id: job.id, boxes })
+                    .send(DetectionResult {
+                        id: job.id,
+                        boxes: output.boxes,
+                        engine: output.engine,
+                        warning: output.warning,
+                    })
                     .is_err()
                 {
                     break;
@@ -153,7 +161,19 @@ impl SlicerApp {
             self.boxes = result.boxes;
             self.selected = None;
             self.detecting = false;
-            self.status = format!("Detected {} photo(s).", self.boxes.len());
+            self.status = match result.warning {
+                Some(warning) => format!(
+                    "Detected {} photo(s) with {} — {}",
+                    self.boxes.len(),
+                    result.engine,
+                    warning
+                ),
+                None => format!(
+                    "Detected {} photo(s) with {}.",
+                    self.boxes.len(),
+                    result.engine
+                ),
+            };
         }
     }
 
