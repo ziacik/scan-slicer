@@ -12,3 +12,7 @@ image = { version = "0.25", features = ["png", "jpeg", "tiff"] }
 rfd = "0.15"
 anyhow = "1"
 opencv = { version = "0.100", default-features = false, features = ["imgproc", "geometry"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
