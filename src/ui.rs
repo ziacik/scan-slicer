@@ -357,7 +357,7 @@ fn build_ui(app: &adw::Application) {
         .title("Open a scan to begin")
         .description("PNG, JPEG or TIFF")
         .build();
-    empty_page.set_can_target(false);
+    empty_page.set_can_target(true);
     empty_page.add_css_class("canvas-empty-page");
 
     let empty_open_button = gtk::Button::with_label("Open Scan…");
@@ -717,14 +717,21 @@ fn connect_canvas(state: &Rc<RefCell<AppState>>, ui: &Ui) {
             let state = state.clone();
             let ui = ui.clone();
             gesture.connect_drag_end(move |_, _, _| {
-                {
+                let adjusted = {
                     let mut st = state.borrow_mut();
+                    let adjusted = st.drag.is_some();
                     st.drag = None;
                     st.selected_mode = None;
-                    st.status = "Frame adjusted.".into();
+                    if adjusted {
+                        st.status = "Frame adjusted.".into();
+                    }
+                    adjusted
+                };
+
+                if adjusted {
+                    refresh_ui(&state.borrow(), &ui);
+                    ui.drawing.queue_draw();
                 }
-                refresh_ui(&state.borrow(), &ui);
-                ui.drawing.queue_draw();
             });
         }
 
@@ -1244,7 +1251,9 @@ fn refresh_ui(state: &AppState, ui: &Ui) {
     ui.spinner.set_visible(busy);
     ui.spinner.set_spinning(busy);
     ui.status_label.set_label(&state.status);
-    ui.empty_page.set_visible(state.image.is_none());
+    let has_image = state.image.is_some();
+    ui.empty_page.set_visible(!has_image);
+    ui.drawing.set_sensitive(has_image);
 }
 
 fn view_transform(state: &AppState, width: i32, height: i32) -> Option<ViewTransform> {
