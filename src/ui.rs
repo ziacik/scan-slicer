@@ -254,7 +254,8 @@ fn build_ui(app: &adw::Application) {
     header.set_title_widget(Some(&title));
 
     let open_button = labeled_icon_button("document-open-symbolic", "Open", "Open scan");
-    let detect_button = labeled_icon_button("view-refresh-symbolic", "Detect", "Detect photos");
+    let detect_button = gtk::Button::with_label("Detect Photos");
+    detect_button.set_tooltip_text(Some("Detect photos in the scan"));
     let undo_button = icon_button("edit-undo-symbolic", "Undo");
     let redo_button = icon_button("edit-redo-symbolic", "Redo");
     let fit_button = icon_button("zoom-fit-best-symbolic", "Fit image to window");
