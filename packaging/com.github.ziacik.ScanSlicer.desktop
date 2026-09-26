@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Scan Slicer
+Comment=Split scanned photo sheets into individual images
+Exec=scan-slicer
+Icon=com.github.ziacik.ScanSlicer
+Terminal=false
+Categories=Graphics;Photography;
+StartupNotify=true

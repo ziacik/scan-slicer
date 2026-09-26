@@ -1,0 +1,222 @@
+name: Packages
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  deb-appimage:
+    name: Debian + AppImage
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            gobject-introspection \
+            libadwaita-1-dev \
+            libgdk-pixbuf-2.0-dev \
+            libgirepository1.0-dev \
+            libgtk-4-dev \
+            librsvg2-dev \
+            patchelf \
+            pkg-config
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Build Debian package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          arch="$(dpkg --print-architecture)"
+          pkgroot="$RUNNER_TEMP/deb-root"
+
+          rm -rf "$pkgroot"
+          mkdir -p "$pkgroot/DEBIAN" dist
+
+          install -Dm755 target/release/scan-slicer "$pkgroot/usr/bin/scan-slicer"
+          install -Dm644 packaging/com.github.ziacik.ScanSlicer.desktop \
+            "$pkgroot/usr/share/applications/com.github.ziacik.ScanSlicer.desktop"
+          install -Dm644 packaging/com.github.ziacik.ScanSlicer.svg \
+            "$pkgroot/usr/share/icons/hicolor/scalable/apps/com.github.ziacik.ScanSlicer.svg"
+          install -Dm644 LICENSE "$pkgroot/usr/share/doc/scan-slicer/copyright"
+
+          cat > "$pkgroot/DEBIAN/control" <<EOF
+          Package: scan-slicer
+          Version: $version
+          Section: graphics
+          Priority: optional
+          Architecture: $arch
+          Maintainer: ziacik
+          Depends: libgtk-4-1 (>= 4.12), libadwaita-1-0 (>= 1.4), libgdk-pixbuf-2.0-0
+          Recommends: sane-utils
+          Homepage: https://github.com/ziacik/scan-slicer
+          Description: Split scanned photo sheets into individual images.
+          EOF
+
+          dpkg-deb --root-owner-group --build \
+            "$pkgroot" "dist/scan-slicer_${version}_${arch}.deb"
+
+      - name: Build AppImage
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          appdir="$RUNNER_TEMP/ScanSlicer.AppDir"
+
+          rm -rf "$appdir"
+          mkdir -p "$appdir/usr/bin" \
+                   "$appdir/usr/share/applications" \
+                   "$appdir/usr/share/icons/hicolor/scalable/apps"
+
+          install -m755 target/release/scan-slicer "$appdir/usr/bin/scan-slicer"
+          install -m644 packaging/com.github.ziacik.ScanSlicer.desktop \
+            "$appdir/usr/share/applications/com.github.ziacik.ScanSlicer.desktop"
+          install -m644 packaging/com.github.ziacik.ScanSlicer.svg \
+            "$appdir/usr/share/icons/hicolor/scalable/apps/com.github.ziacik.ScanSlicer.svg"
+
+          curl --fail --location --retry 3 \
+            -o linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          curl --fail --location --retry 3 \
+            -o linuxdeploy-plugin-gtk.sh \
+            https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-gtk.sh
+
+          APPIMAGE_EXTRACT_AND_RUN=1 ./linuxdeploy-x86_64.AppImage \
+            --appdir "$appdir" \
+            --desktop-file packaging/com.github.ziacik.ScanSlicer.desktop \
+            --icon-file packaging/com.github.ziacik.ScanSlicer.svg \
+            --plugin gtk \
+            --output appimage
+
+          image="$(find . -maxdepth 1 -type f -name '*.AppImage' ! -name 'linuxdeploy-*' -print -quit)"
+          test -n "$image"
+          mv "$image" "dist/scan-slicer_${version}_x86_64.AppImage"
+
+      - name: Upload Debian and AppImage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-slicer-deb-appimage
+          path: |
+            dist/*.deb
+            dist/*.AppImage
+          if-no-files-found: error
+
+  arch:
+    name: Arch Linux
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed \
+            base-devel \
+            cargo \
+            git \
+            gtk4 \
+            libadwaita \
+            rust \
+            sane
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Build native Arch package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          builddir="$GITHUB_WORKSPACE/.arch-package"
+
+          rm -rf "$builddir"
+          mkdir -p "$builddir" dist
+
+          cp target/release/scan-slicer "$builddir/scan-slicer"
+          cp packaging/com.github.ziacik.ScanSlicer.desktop "$builddir/"
+          cp packaging/com.github.ziacik.ScanSlicer.svg "$builddir/"
+          cp LICENSE "$builddir/"
+
+          cat > "$builddir/PKGBUILD" <<EOF
+          pkgname=scan-slicer
+          pkgver=$version
+          pkgrel=1
+          pkgdesc='Split scanned photo sheets into individual images'
+          arch=('x86_64')
+          url='https://github.com/ziacik/scan-slicer'
+          license=('MIT')
+          depends=('gtk4' 'libadwaita')
+          optdepends=('sane: scanner acquisition support')
+          source=('scan-slicer' 'com.github.ziacik.ScanSlicer.desktop' 'com.github.ziacik.ScanSlicer.svg' 'LICENSE')
+          sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
+
+          package() {
+            install -Dm755 "\$srcdir/scan-slicer" "\$pkgdir/usr/bin/scan-slicer"
+            install -Dm644 "\$srcdir/com.github.ziacik.ScanSlicer.desktop" \
+              "\$pkgdir/usr/share/applications/com.github.ziacik.ScanSlicer.desktop"
+            install -Dm644 "\$srcdir/com.github.ziacik.ScanSlicer.svg" \
+              "\$pkgdir/usr/share/icons/hicolor/scalable/apps/com.github.ziacik.ScanSlicer.svg"
+            install -Dm644 "\$srcdir/LICENSE" "\$pkgdir/usr/share/licenses/scan-slicer/LICENSE"
+          }
+          EOF
+
+          useradd --create-home builder
+          chown -R builder:builder "$builddir"
+          su builder -s /bin/bash -c "cd '$builddir' && makepkg --noconfirm --force"
+
+          cp "$builddir"/*.pkg.tar.zst dist/
+
+      - name: Upload Arch artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-slicer-arch
+          path: dist/*.pkg.tar.zst
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release assets
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [deb-appimage, arch]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: scan-slicer-*
+          path: release
+          merge-multiple: true
+
+      - name: Create release and upload packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" release/* --clobber
