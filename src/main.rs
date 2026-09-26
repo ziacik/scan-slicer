@@ -478,22 +478,22 @@ impl eframe::App for SlicerApp {
                 }
 
                 ui.separator();
-                ui.label("Detection");
 
                 let openai_configured = std::env::var_os("OPENAI_API_KEY").is_some();
                 let threshold_changed = if openai_configured {
                     false
                 } else {
+                    ui.label("OpenCV");
                     ui.add(egui::Slider::new(&mut self.threshold, 5..=80).text("threshold"))
                         .changed()
                 };
 
                 let margin_changed = ui
-                    .add(egui::Slider::new(&mut self.margin, 0..=100).text("margin px"))
+                    .add(egui::Slider::new(&mut self.margin, 0..=100).text("extra margin px"))
                     .changed();
 
                 if (threshold_changed || margin_changed) && self.image.is_some() {
-                    self.status = "Detection settings changed — click Detect photos.".into();
+                    self.status = "Settings changed — click Detect photos.".into();
                 }
             });
         });
