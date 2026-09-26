@@ -14,7 +14,6 @@ use gtk::{
     gdk,
     gdk::prelude::GdkCairoContextExt,
     glib,
-    prelude::*,
 };
 
 use image::DynamicImage;
@@ -416,7 +415,7 @@ fn icon_button(icon_name: &str, tooltip: &str) -> gtk::Button {
 
 fn install_css() {
     let provider = gtk::CssProvider::new();
-    provider.load_from_data(
+    provider.load_from_string(
         "
         .scan-canvas {
             background: #242424;
@@ -441,7 +440,8 @@ fn connect_actions(state: &Rc<RefCell<AppState>>, ui: &Ui) {
     {
         let state = state.clone();
         let ui = ui.clone();
-        ui.open_button.connect_clicked(move |_| {
+        let button = ui.open_button.clone();
+        button.connect_clicked(move |_| {
             choose_and_load(state.clone(), ui.clone());
         });
     }
@@ -449,7 +449,8 @@ fn connect_actions(state: &Rc<RefCell<AppState>>, ui: &Ui) {
     {
         let state = state.clone();
         let ui = ui.clone();
-        ui.detect_button.connect_clicked(move |_| {
+        let button = ui.detect_button.clone();
+        button.connect_clicked(move |_| {
             start_detection(state.clone(), ui.clone());
         });
     }
@@ -457,7 +458,8 @@ fn connect_actions(state: &Rc<RefCell<AppState>>, ui: &Ui) {
     {
         let state = state.clone();
         let ui = ui.clone();
-        ui.export_button.connect_clicked(move |_| {
+        let button = ui.export_button.clone();
+        button.connect_clicked(move |_| {
             start_export(state.clone(), ui.clone());
         });
     }
@@ -465,7 +467,8 @@ fn connect_actions(state: &Rc<RefCell<AppState>>, ui: &Ui) {
     {
         let state = state.clone();
         let ui = ui.clone();
-        ui.add_button.connect_clicked(move |_| {
+        let button = ui.add_button.clone();
+        button.connect_clicked(move |_| {
             state.borrow_mut().add_box();
             refresh_ui(&state.borrow(), &ui);
             ui.drawing.queue_draw();
@@ -475,7 +478,8 @@ fn connect_actions(state: &Rc<RefCell<AppState>>, ui: &Ui) {
     {
         let state = state.clone();
         let ui = ui.clone();
-        ui.delete_button.connect_clicked(move |_| {
+        let button = ui.delete_button.clone();
+        button.connect_clicked(move |_| {
             state.borrow_mut().remove_selected();
             refresh_ui(&state.borrow(), &ui);
             ui.drawing.queue_draw();
@@ -485,7 +489,8 @@ fn connect_actions(state: &Rc<RefCell<AppState>>, ui: &Ui) {
     {
         let state = state.clone();
         let ui = ui.clone();
-        ui.undo_button.connect_clicked(move |_| {
+        let button = ui.undo_button.clone();
+        button.connect_clicked(move |_| {
             state.borrow_mut().undo();
             refresh_ui(&state.borrow(), &ui);
             ui.drawing.queue_draw();
@@ -495,7 +500,8 @@ fn connect_actions(state: &Rc<RefCell<AppState>>, ui: &Ui) {
     {
         let state = state.clone();
         let ui = ui.clone();
-        ui.redo_button.connect_clicked(move |_| {
+        let button = ui.redo_button.clone();
+        button.connect_clicked(move |_| {
             state.borrow_mut().redo();
             refresh_ui(&state.borrow(), &ui);
             ui.drawing.queue_draw();
@@ -505,7 +511,8 @@ fn connect_actions(state: &Rc<RefCell<AppState>>, ui: &Ui) {
     {
         let state = state.clone();
         let ui = ui.clone();
-        ui.fit_button.connect_clicked(move |_| {
+        let button = ui.fit_button.clone();
+        button.connect_clicked(move |_| {
             {
                 let mut st = state.borrow_mut();
                 st.zoom = 1.0;
@@ -519,7 +526,8 @@ fn connect_actions(state: &Rc<RefCell<AppState>>, ui: &Ui) {
     {
         let state = state.clone();
         let ui = ui.clone();
-        ui.padding_spin.connect_value_changed(move |spin| {
+        let spin_widget = ui.padding_spin.clone();
+        spin_widget.connect_value_changed(move |spin| {
             {
                 let mut st = state.borrow_mut();
                 st.margin = spin.value_as_int().max(0) as u32;
@@ -543,6 +551,7 @@ fn connect_canvas(state: &Rc<RefCell<AppState>>, ui: &Ui) {
     {
         let state = state.clone();
         let drawing = ui.drawing.clone();
+        let controller_target = drawing.clone();
         let ui = ui.clone();
         let motion = gtk::EventControllerMotion::new();
         motion.connect_motion(move |_, x, y| {
@@ -573,7 +582,7 @@ fn connect_canvas(state: &Rc<RefCell<AppState>>, ui: &Ui) {
             }
             refresh_ui(&state.borrow(), &ui);
         });
-        ui.drawing.add_controller(motion);
+        controller_target.add_controller(motion);
     }
 
     {
@@ -723,6 +732,7 @@ fn connect_canvas(state: &Rc<RefCell<AppState>>, ui: &Ui) {
     {
         let state = state.clone();
         let ui = ui.clone();
+        let controller_target = ui.drawing.clone();
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
         scroll.connect_scroll(move |_, _, dy| {
             let mut st = state.borrow_mut();
@@ -756,12 +766,13 @@ fn connect_canvas(state: &Rc<RefCell<AppState>>, ui: &Ui) {
             ui.drawing.queue_draw();
             glib::Propagation::Stop
         });
-        ui.drawing.add_controller(scroll);
+        controller_target.add_controller(scroll);
     }
 
     {
         let state = state.clone();
         let ui = ui.clone();
+        let controller_target = ui.drawing.clone();
         let keys = gtk::EventControllerKey::new();
         keys.connect_key_pressed(move |_, key, _, modifiers| {
             let control = modifiers.contains(gdk::ModifierType::CONTROL_MASK);
@@ -807,7 +818,7 @@ fn connect_canvas(state: &Rc<RefCell<AppState>>, ui: &Ui) {
                 glib::Propagation::Proceed
             }
         });
-        ui.drawing.add_controller(keys);
+        controller_target.add_controller(keys);
     }
 }
 
