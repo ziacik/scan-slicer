@@ -473,18 +473,24 @@ impl SlicerApp {
             let screen = rect_to_screen(*rect, canvas, scale);
             let selected = self.selected == Some(index);
             let box_color = if selected {
-                Color32::WHITE
+                accent()
             } else {
                 Color32::from_rgb(116, 158, 255)
             };
             let stroke = Stroke::new(if selected { 2.5 } else { 2.0 }, box_color);
+            let outline = Stroke::new(
+                if selected { 5.0 } else { 4.0 },
+                Color32::from_black_alpha(190),
+            );
 
             let points = rect_screen_corners(*rect, canvas, scale);
             if rect.corners.is_some() {
                 for i in 0..4 {
+                    painter.line_segment([points[i], points[(i + 1) % 4]], outline);
                     painter.line_segment([points[i], points[(i + 1) % 4]], stroke);
                 }
             } else {
+                painter.rect_stroke(screen, 2.0, outline, StrokeKind::Outside);
                 painter.rect_stroke(screen, 2.0, stroke, StrokeKind::Outside);
             }
 
@@ -524,7 +530,7 @@ impl SlicerApp {
                     painter.circle_stroke(
                         point,
                         HANDLE_RADIUS,
-                        Stroke::new(2.0, Color32::WHITE),
+                        Stroke::new(2.0, Color32::from_black_alpha(220)),
                     );
                 }
             }
