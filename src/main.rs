@@ -21,6 +21,8 @@ use crate::detection::{detect_photos, PhotoRect};
 
 const HANDLE_RADIUS: f32 = 7.0;
 const EDGE_HANDLE_RADIUS: f32 = 5.0;
+const MAGNIFIER_SIZE: f32 = 150.0;
+const MAGNIFIER_ZOOM: f32 = 5.0;
 
 fn accent() -> Color32 {
     Color32::from_rgb(96, 137, 255)
@@ -521,6 +523,8 @@ impl SlicerApp {
             Sense::click_and_drag(),
         );
 
+        let mut magnifier = None;
+
         if let Some(pointer) = response.interact_pointer_pos() {
             let image_pos = |p: Pos2| -> Pos2 {
                 Pos2::new(
@@ -552,6 +556,10 @@ impl SlicerApp {
                     apply_drag(&mut rect, drag.mode, dx, dy, image.width(), image.height());
                     self.boxes[drag.index] = rect;
                     ui.ctx().set_cursor_icon(drag_cursor(drag.mode, true));
+
+                    if drag.mode != DragMode::Move {
+                        magnifier = drag_target(rect, drag.mode).map(|target| (pointer, target));
+                    }
                 }
             } else if let Some((_, mode)) = self.hit_test(pointer, canvas, scale) {
                 ui.ctx().set_cursor_icon(drag_cursor(mode, false));
@@ -640,6 +648,20 @@ impl SlicerApp {
                     );
                 }
             }
+        }
+
+        if let Some((pointer, target)) = magnifier {
+            draw_magnifier(
+                &painter,
+                texture,
+                workspace_rect,
+                canvas,
+                scale,
+                image.width(),
+                image.height(),
+                pointer,
+                target,
+            );
         }
     }
 
@@ -1002,6 +1024,100 @@ fn apply_drag(
     set_rect_corners(rect, corners);
 }
 
+fn drag_target(rect: PhotoRect, mode: DragMode) -> Option<[f32; 2]> {
+    let corners = rect_image_corners(rect);
+    match mode {
+        DragMode::Move => None,
+        DragMode::TopLeft => Some(corners[0]),
+        DragMode::TopRight => Some(corners[1]),
+        DragMode::BottomRight => Some(corners[2]),
+        DragMode::BottomLeft => Some(corners[3]),
+        DragMode::TopEdge => Some(array_midpoint(corners[0], corners[1])),
+        DragMode::RightEdge => Some(array_midpoint(corners[1], corners[2])),
+        DragMode::BottomEdge => Some(array_midpoint(corners[2], corners[3])),
+        DragMode::LeftEdge => Some(array_midpoint(corners[3], corners[0])),
+    }
+}
+
+fn array_midpoint(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
+    [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5]
+}
+
+fn draw_magnifier(
+    painter: &egui::Painter,
+    texture: &TextureHandle,
+    workspace_rect: Rect,
+    canvas: Rect,
+    scale: f32,
+    image_w: u32,
+    image_h: u32,
+    pointer: Pos2,
+    target: [f32; 2],
+) {
+    let size = Vec2::splat(MAGNIFIER_SIZE);
+    let gap = 22.0;
+
+    let mut lens_min = pointer + Vec2::new(gap, -MAGNIFIER_SIZE - gap);
+    if lens_min.x + MAGNIFIER_SIZE > workspace_rect.right() - 8.0 {
+        lens_min.x = pointer.x - MAGNIFIER_SIZE - gap;
+    }
+    if lens_min.y < workspace_rect.top() + 8.0 {
+        lens_min.y = pointer.y + gap;
+    }
+    lens_min.x = lens_min
+        .x
+        .clamp(workspace_rect.left() + 8.0, workspace_rect.right() - MAGNIFIER_SIZE - 8.0);
+    lens_min.y = lens_min
+        .y
+        .clamp(workspace_rect.top() + 8.0, workspace_rect.bottom() - MAGNIFIER_SIZE - 8.0);
+
+    let lens = Rect::from_min_size(lens_min, size);
+    painter.rect_filled(lens.expand(4.0), 10.0, Color32::from_black_alpha(220));
+
+    let sample_w = (MAGNIFIER_SIZE / (scale * MAGNIFIER_ZOOM)).max(4.0);
+    let sample_h = sample_w;
+    let half_w = sample_w * 0.5;
+    let half_h = sample_h * 0.5;
+
+    let max_x = image_w as f32;
+    let max_y = image_h as f32;
+    let left = (target[0] - half_w).clamp(0.0, (max_x - sample_w).max(0.0));
+    let top = (target[1] - half_h).clamp(0.0, (max_y - sample_h).max(0.0));
+    let right = (left + sample_w).min(max_x);
+    let bottom = (top + sample_h).min(max_y);
+
+    let uv = Rect::from_min_max(
+        Pos2::new(left / max_x.max(1.0), top / max_y.max(1.0)),
+        Pos2::new(right / max_x.max(1.0), bottom / max_y.max(1.0)),
+    );
+    painter.image(texture.id(), lens, uv, Color32::WHITE);
+    painter.rect_stroke(
+        lens,
+        8.0,
+        Stroke::new(2.0, Color32::WHITE),
+        StrokeKind::Inside,
+    );
+
+    let target_x = lens.left() + ((target[0] - left) / (right - left).max(1.0)) * lens.width();
+    let target_y = lens.top() + ((target[1] - top) / (bottom - top).max(1.0)) * lens.height();
+    let cross = Pos2::new(target_x, target_y);
+    painter.line_segment(
+        [cross - Vec2::new(12.0, 0.0), cross + Vec2::new(12.0, 0.0)],
+        Stroke::new(1.5, Color32::WHITE),
+    );
+    painter.line_segment(
+        [cross - Vec2::new(0.0, 12.0), cross + Vec2::new(0.0, 12.0)],
+        Stroke::new(1.5, Color32::WHITE),
+    );
+    painter.circle_stroke(cross, 4.0, Stroke::new(1.5, accent()));
+
+    let source_target = Pos2::new(
+        canvas.left() + target[0] * scale,
+        canvas.top() + target[1] * scale,
+    );
+    painter.circle_stroke(source_target, HANDLE_RADIUS + 3.0, Stroke::new(1.5, Color32::WHITE));
+}
+
 fn drag_cursor(mode: DragMode, active: bool) -> CursorIcon {
     match mode {
         DragMode::Move => {
@@ -1295,6 +1411,26 @@ mod tests {
         assert!((shift_a[0] - shift_b[0]).abs() < 0.001);
         assert!((shift_a[1] - shift_b[1]).abs() < 0.001);
         assert!((shift_a[0] * before_vector[0] + shift_a[1] * before_vector[1]).abs() < 0.01);
+    }
+
+    #[test]
+    fn magnifier_target_follows_dragged_edge_midpoint() {
+        let rect = PhotoRect {
+            x: 10,
+            y: 10,
+            w: 120,
+            h: 100,
+            corners: Some([
+                [20.0, 30.0],
+                [120.0, 20.0],
+                [130.0, 100.0],
+                [30.0, 110.0],
+            ]),
+        };
+
+        assert_eq!(drag_target(rect, DragMode::TopLeft), Some([20.0, 30.0]));
+        assert_eq!(drag_target(rect, DragMode::TopEdge), Some([70.0, 25.0]));
+        assert_eq!(drag_target(rect, DragMode::Move), None);
     }
 
     #[test]
