@@ -36,7 +36,6 @@ struct ActiveDrag {
 struct DetectionJob {
     id: u64,
     image: DynamicImage,
-    threshold: u8,
     margin: u32,
 }
 
@@ -59,7 +58,6 @@ struct SlicerApp {
     boxes: Vec<PhotoRect>,
     selected: Option<usize>,
     drag: Option<ActiveDrag>,
-    threshold: u8,
     margin: u32,
     status: String,
     detection_tx: Sender<DetectionJob>,
@@ -79,7 +77,7 @@ impl SlicerApp {
 
         thread::spawn(move || {
             while let Ok(job) = job_rx.recv() {
-                let output = detect_photos(&job.image, job.threshold, job.margin);
+                let output = detect_photos(&job.image, job.margin);
                 if result_tx
                     .send(DetectionResult {
                         id: job.id,
@@ -101,7 +99,6 @@ impl SlicerApp {
             boxes: Vec::new(),
             selected: None,
             drag: None,
-            threshold: 22,
             margin: 0,
             status: "Open a scan to begin.".into(),
             detection_tx: job_tx,
@@ -170,7 +167,6 @@ impl SlicerApp {
         let job = DetectionJob {
             id: self.detection_id,
             image: image.clone(),
-            threshold: self.threshold,
             margin: self.margin,
         };
 
@@ -479,20 +475,11 @@ impl eframe::App for SlicerApp {
 
                 ui.separator();
 
-                let openai_configured = std::env::var_os("OPENAI_API_KEY").is_some();
-                let threshold_changed = if openai_configured {
-                    false
-                } else {
-                    ui.label("OpenCV");
-                    ui.add(egui::Slider::new(&mut self.threshold, 5..=80).text("threshold"))
-                        .changed()
-                };
-
                 let margin_changed = ui
                     .add(egui::Slider::new(&mut self.margin, 0..=100).text("extra margin px"))
                     .changed();
 
-                if (threshold_changed || margin_changed) && self.image.is_some() {
+                if margin_changed && self.image.is_some() {
                     self.status = "Settings changed — click Detect photos.".into();
                 }
             });
