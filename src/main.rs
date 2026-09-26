@@ -85,7 +85,7 @@ fn foreground(dark: bool) -> Color32 {
     }
 }
 
-fn canvas_muted(ui.visuals().dark_mode) -> Color32 {
+fn canvas_muted() -> Color32 {
     Color32::from_rgb(190, 190, 190)
 }
 
