@@ -9,6 +9,7 @@ license = "MIT"
 eframe = "0.33"
 egui_extras = { version = "0.33", features = ["image"] }
 image = { version = "0.25", features = ["png", "jpeg", "tiff"] }
+imageproc = { version = "0.27", default-features = false }
 rfd = "0.15"
 anyhow = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
