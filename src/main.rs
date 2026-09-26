@@ -3,7 +3,10 @@ mod openai_detection;
 
 use std::{
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Arc,
+    },
     thread,
 };
 
@@ -79,7 +82,7 @@ struct ActiveDrag {
 
 struct DetectionJob {
     id: u64,
-    image: DynamicImage,
+    image: Arc<DynamicImage>,
     margin: u32,
 }
 
@@ -95,8 +98,21 @@ struct LoadResult {
     result: Result<DynamicImage, String>,
 }
 
+enum ExportEvent {
+    Progress {
+        completed: usize,
+        total: usize,
+        exported: usize,
+    },
+    Finished {
+        exported: usize,
+        dir: PathBuf,
+    },
+    Failed(String),
+}
+
 struct SlicerApp {
-    image: Option<DynamicImage>,
+    image: Option<Arc<DynamicImage>>,
     texture: Option<TextureHandle>,
     image_path: Option<PathBuf>,
     boxes: Vec<PhotoRect>,
@@ -111,6 +127,9 @@ struct SlicerApp {
     load_tx: Sender<LoadResult>,
     load_rx: Receiver<LoadResult>,
     loading: bool,
+    export_tx: Sender<ExportEvent>,
+    export_rx: Receiver<ExportEvent>,
+    exporting: bool,
 }
 
 impl SlicerApp {
@@ -118,6 +137,7 @@ impl SlicerApp {
         let (job_tx, job_rx) = mpsc::channel::<DetectionJob>();
         let (result_tx, result_rx) = mpsc::channel::<DetectionResult>();
         let (load_tx, load_rx) = mpsc::channel::<LoadResult>();
+        let (export_tx, export_rx) = mpsc::channel::<ExportEvent>();
 
         let mut visuals = egui::Visuals::dark();
         visuals.panel_fill = Color32::from_rgb(23, 25, 31);
@@ -137,7 +157,7 @@ impl SlicerApp {
 
         thread::spawn(move || {
             while let Ok(job) = job_rx.recv() {
-                let output = detect_photos(&job.image, job.margin);
+                let output = detect_photos(job.image.as_ref(), job.margin);
                 if result_tx
                     .send(DetectionResult {
                         id: job.id,
@@ -168,6 +188,9 @@ impl SlicerApp {
             load_tx,
             load_rx,
             loading: false,
+            export_tx,
+            export_rx,
+            exporting: false,
         }
     }
 
@@ -199,6 +222,7 @@ impl SlicerApp {
 
         match loaded.result {
             Ok(image) => {
+                let image = Arc::new(image);
                 // The original stays full-resolution for detection/export. The GPU only
                 // needs a preview large enough for the editor window.
                 const MAX_UI_PREVIEW_DIM: u32 = 2400;
@@ -226,7 +250,7 @@ impl SlicerApp {
         self.detection_id = self.detection_id.wrapping_add(1);
         let job = DetectionJob {
             id: self.detection_id,
-            image: image.clone(),
+            image: Arc::clone(image),
             margin: self.margin,
         };
 
@@ -267,7 +291,11 @@ impl SlicerApp {
         }
     }
 
-    fn export(&mut self) {
+    fn export(&mut self, ctx: &egui::Context) {
+        if self.exporting {
+            return;
+        }
+
         let Some(image) = self.image.as_ref() else {
             return;
         };
@@ -296,39 +324,96 @@ impl SlicerApp {
             .as_deref()
             .and_then(Path::file_stem)
             .and_then(|s| s.to_str())
-            .unwrap_or("scan");
+            .unwrap_or("scan")
+            .to_owned();
 
-        let rgba = image.to_rgba8();
-        let mut exported = 0usize;
-        for (index, rect) in self.boxes.iter().enumerate() {
-            let rect = rect.clamped(image.width(), image.height());
-            if rect.w < 2 || rect.h < 2 {
-                continue;
+        let image = Arc::clone(image);
+        let boxes = self.boxes.clone();
+        let tx = self.export_tx.clone();
+        let repaint = ctx.clone();
+
+        self.exporting = true;
+        self.status = format!("Exporting {} photo(s)…", boxes.len());
+
+        thread::spawn(move || {
+            let total = boxes.len();
+            let rgba = image.to_rgba8();
+            let mut exported = 0usize;
+
+            for (index, rect) in boxes.iter().enumerate() {
+                let rect = rect.clamped(image.width(), image.height());
+                if rect.w < 2 || rect.h < 2 {
+                    let _ = tx.send(ExportEvent::Progress {
+                        completed: index + 1,
+                        total,
+                        exported,
+                    });
+                    repaint.request_repaint();
+                    continue;
+                }
+
+                let crop = match rect.corners {
+                    Some(corners) => match perspective_crop(&rgba, corners) {
+                        Ok(crop) => crop,
+                        Err(error) => {
+                            let _ = tx.send(ExportEvent::Failed(format!(
+                                "Export failed for frame {}: {error}",
+                                index + 1
+                            )));
+                            repaint.request_repaint();
+                            return;
+                        }
+                    },
+                    None => {
+                        image::imageops::crop_imm(&rgba, rect.x, rect.y, rect.w, rect.h).to_image()
+                    }
+                };
+
+                let path = dir.join(format!("{stem}_{:02}.png", index + 1));
+                if let Err(error) = crop.save(&path) {
+                    let _ = tx.send(ExportEvent::Failed(format!(
+                        "Export failed at {}: {error}",
+                        path.display()
+                    )));
+                    repaint.request_repaint();
+                    return;
+                }
+
+                exported += 1;
+                let _ = tx.send(ExportEvent::Progress {
+                    completed: index + 1,
+                    total,
+                    exported,
+                });
+                repaint.request_repaint();
             }
 
-            let crop = match rect.corners {
-                Some(corners) => match perspective_crop(&rgba, corners) {
-                    Ok(crop) => crop,
-                    Err(error) => {
-                        self.status =
-                            format!("Export failed for frame {}: {error}", index + 1);
-                        return;
-                    }
-                },
-                None => image::imageops::crop_imm(&rgba, rect.x, rect.y, rect.w, rect.h).to_image(),
-            };
+            let _ = tx.send(ExportEvent::Finished { exported, dir });
+            repaint.request_repaint();
+        });
+    }
 
-            let path = dir.join(format!("{stem}_{:02}.png", index + 1));
-            match crop.save(&path) {
-                Ok(()) => exported += 1,
-                Err(error) => {
-                    self.status = format!("Export failed at {}: {error}", path.display());
-                    return;
+    fn poll_export(&mut self) {
+        while let Ok(event) = self.export_rx.try_recv() {
+            match event {
+                ExportEvent::Progress {
+                    completed,
+                    total,
+                    exported,
+                } => {
+                    self.status =
+                        format!("Exporting {completed}/{total}… {exported} photo(s) saved.");
+                }
+                ExportEvent::Finished { exported, dir } => {
+                    self.exporting = false;
+                    self.status = format!("Exported {exported} photo(s) to {}", dir.display());
+                }
+                ExportEvent::Failed(error) => {
+                    self.exporting = false;
+                    self.status = error;
                 }
             }
         }
-
-        self.status = format!("Exported {exported} photo(s) to {}", dir.display());
     }
 
     fn add_box(&mut self) {
@@ -578,7 +663,8 @@ impl eframe::App for SlicerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_load(ctx);
         self.poll_detection();
-        if self.detecting || self.loading {
+        self.poll_export();
+        if self.detecting || self.loading || self.exporting {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 
@@ -599,7 +685,7 @@ impl eframe::App for SlicerApp {
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.add_space(18.0);
-                        if self.loading || self.detecting {
+                        if self.loading || self.detecting || self.exporting {
                             ui.add(egui::Spinner::new().size(16.0));
                         }
                         ui.label(
@@ -648,13 +734,13 @@ impl eframe::App for SlicerApp {
                 }
 
                 ui.add_space(18.0);
-                if action_button(ui, "Open scan", !self.loading, false) {
+                if action_button(ui, "Open scan", !self.loading && !self.exporting, false) {
                     self.open_image(ctx);
                 }
                 if action_button(
                     ui,
                     if self.detecting { "Detecting…" } else { "Detect photos" },
-                    self.image.is_some() && !self.detecting && !self.loading,
+                    self.image.is_some() && !self.detecting && !self.loading && !self.exporting,
                     false,
                 ) {
                     self.redetect();
@@ -671,7 +757,7 @@ impl eframe::App for SlicerApp {
                     let half = (ui.available_width() - 8.0) / 2.0;
                     if ui
                         .add_enabled(
-                            self.image.is_some(),
+                            self.image.is_some() && !self.exporting,
                             egui::Button::new(RichText::new("+ Add").strong())
                                 .min_size(Vec2::new(half, 38.0))
                                 .fill(surface())
@@ -685,7 +771,7 @@ impl eframe::App for SlicerApp {
 
                     if ui
                         .add_enabled(
-                            self.selected.is_some(),
+                            self.selected.is_some() && !self.exporting,
                             egui::Button::new("Delete")
                                 .min_size(Vec2::new(half, 38.0))
                                 .fill(surface())
@@ -738,10 +824,13 @@ impl eframe::App for SlicerApp {
                     if action_button(
                         ui,
                         "Export PNGs",
-                        !self.boxes.is_empty() && !self.loading,
+                        !self.boxes.is_empty()
+                            && !self.loading
+                            && !self.detecting
+                            && !self.exporting,
                         true,
                     ) {
-                        self.export();
+                        self.export(ctx);
                     }
                     ui.add_space(8.0);
                     ui.label(
@@ -757,7 +846,7 @@ impl eframe::App for SlicerApp {
             .show(ctx, |ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.add_space(12.0);
-                    if self.loading || self.detecting {
+                    if self.loading || self.detecting || self.exporting {
                         ui.add(egui::Spinner::new().size(16.0));
                     }
                     ui.label(RichText::new(&self.status).size(12.5).color(muted()));
