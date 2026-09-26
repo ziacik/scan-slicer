@@ -434,7 +434,7 @@ fn install_css() {
     provider.load_from_string(
         "
         .scan-canvas {
-            background: #242424;
+            background: @view_bg_color;
         }
 
         .sidebar {
@@ -444,11 +444,11 @@ fn install_css() {
         .canvas-empty-page,
         .canvas-empty-page label,
         .canvas-empty-page image {
-            color: #f6f5f4;
+            color: @view_fg_color;
         }
 
         .canvas-empty-page .dim-label {
-            color: rgba(246, 245, 244, 0.72);
+            opacity: 0.72;
         }
         ",
     );
@@ -1252,9 +1252,6 @@ fn view_transform(state: &AppState, width: i32, height: i32) -> Option<ViewTrans
 }
 
 fn draw_canvas(state: &AppState, cr: &gtk::cairo::Context, width: i32, height: i32) {
-    cr.set_source_rgb(0.141, 0.141, 0.141);
-    let _ = cr.paint();
-
     let (Some(image), Some(preview), Some(transform)) = (
         state.image.as_ref(),
         state.preview.as_ref(),
