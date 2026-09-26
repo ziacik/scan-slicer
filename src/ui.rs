@@ -601,18 +601,34 @@ fn connect_canvas(state: &Rc<RefCell<AppState>>, ui: &Ui) {
                 let mut state = state.borrow_mut();
                 state.hover = [x, y];
 
-                let cursor = if state.drag.is_some() {
+                let cursor = if state.drag.is_some() || state.pan_drag_start.is_some() {
                     "grabbing"
                 } else if let Some(transform) =
                     view_transform(&state, drawing.width(), drawing.height())
                 {
-                    match hit_test(&state, [x, y], transform).map(|(_, mode)| mode) {
-                        Some(DragMode::Move) => "grab",
-                        Some(DragMode::TopEdge | DragMode::BottomEdge) => "ns-resize",
-                        Some(DragMode::LeftEdge | DragMode::RightEdge) => "ew-resize",
-                        Some(DragMode::TopLeft | DragMode::BottomRight) => "nwse-resize",
-                        Some(DragMode::TopRight | DragMode::BottomLeft) => "nesw-resize",
-                        None => "default",
+                    match hit_test(&state, [x, y], transform) {
+                        Some((index, DragMode::Move)) if state.selected == Some(index) => "move",
+                        Some((index, DragMode::TopEdge | DragMode::BottomEdge))
+                            if state.selected == Some(index) =>
+                        {
+                            "ns-resize"
+                        }
+                        Some((index, DragMode::LeftEdge | DragMode::RightEdge))
+                            if state.selected == Some(index) =>
+                        {
+                            "ew-resize"
+                        }
+                        Some((index, DragMode::TopLeft | DragMode::BottomRight))
+                            if state.selected == Some(index) =>
+                        {
+                            "nwse-resize"
+                        }
+                        Some((index, DragMode::TopRight | DragMode::BottomLeft))
+                            if state.selected == Some(index) =>
+                        {
+                            "nesw-resize"
+                        }
+                        _ => "grab",
                     }
                 } else {
                     "default"
@@ -647,22 +663,31 @@ fn connect_canvas(state: &Rc<RefCell<AppState>>, ui: &Ui) {
                     };
 
                     if let Some((index, mode)) = hit_test(&st, [x, y], transform) {
-                        st.push_undo();
-                        let start_rect = st.boxes[index];
-                        st.selected = Some(index);
-                        st.selected_mode = Some(mode);
-                        st.drag = Some(ActiveDrag {
-                        index,
-                        mode,
-                        start_rect,
-                        start_pointer: [x, y],
-                        pointer: [x, y],
-                    });
-                        gesture.set_state(gtk::EventSequenceState::Claimed);
+                        if st.selected == Some(index) {
+                            st.push_undo();
+                            let start_rect = st.boxes[index];
+                            st.selected_mode = Some(mode);
+                            st.drag = Some(ActiveDrag {
+                                index,
+                                mode,
+                                start_rect,
+                                start_pointer: [x, y],
+                                pointer: [x, y],
+                            });
+                        } else {
+                            // The first interaction only focuses the frame. Keep the
+                            // current gesture as a canvas pan; a subsequent drag on the
+                            // focused frame edits it.
+                            st.selected = Some(index);
+                            st.selected_mode = None;
+                            st.pan_drag_start = Some(st.pan);
+                        }
                     } else {
                         st.selected = None;
                         st.selected_mode = None;
+                        st.pan_drag_start = Some(st.pan);
                     }
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
                 }
 
                 refresh_ui(&state.borrow(), &ui);
@@ -675,37 +700,41 @@ fn connect_canvas(state: &Rc<RefCell<AppState>>, ui: &Ui) {
             let ui = ui.clone();
             gesture.connect_drag_update(move |_, dx, dy| {
                 let mut st = state.borrow_mut();
-                let Some(active) = st.drag else {
-                    return;
-                };
-                let Some(image) = st.image.as_ref().cloned() else {
-                    return;
-                };
-                let Some(transform) =
-                    view_transform(&st, ui.drawing.width(), ui.drawing.height())
-                else {
-                    return;
-                };
 
-                let mut rect = active.start_rect;
-                editor::apply_drag(
-                    &mut rect,
-                    active.mode,
-                    (dx / transform.scale) as f32,
-                    (dy / transform.scale) as f32,
-                    image.width(),
-                    image.height(),
-                );
-                if active.index < st.boxes.len() {
-                    st.boxes[active.index] = rect;
+                if let Some(active) = st.drag {
+                    let Some(image) = st.image.as_ref().cloned() else {
+                        return;
+                    };
+                    let Some(transform) =
+                        view_transform(&st, ui.drawing.width(), ui.drawing.height())
+                    else {
+                        return;
+                    };
+
+                    let mut rect = active.start_rect;
+                    editor::apply_drag(
+                        &mut rect,
+                        active.mode,
+                        (dx / transform.scale) as f32,
+                        (dy / transform.scale) as f32,
+                        image.width(),
+                        image.height(),
+                    );
+                    if active.index < st.boxes.len() {
+                        st.boxes[active.index] = rect;
+                    }
+                    st.drag = Some(ActiveDrag {
+                        pointer: [
+                            active.start_pointer[0] + dx,
+                            active.start_pointer[1] + dy,
+                        ],
+                        ..active
+                    });
+                } else if let Some((start_x, start_y)) = st.pan_drag_start {
+                    st.pan = (start_x + dx as f32, start_y + dy as f32);
+                } else {
+                    return;
                 }
-                st.drag = Some(ActiveDrag {
-                    pointer: [
-                        active.start_pointer[0] + dx,
-                        active.start_pointer[1] + dy,
-                    ],
-                    ..active
-                });
 
                 drop(st);
                 refresh_ui(&state.borrow(), &ui);
@@ -717,18 +746,20 @@ fn connect_canvas(state: &Rc<RefCell<AppState>>, ui: &Ui) {
             let state = state.clone();
             let ui = ui.clone();
             gesture.connect_drag_end(move |_, _, _| {
-                let adjusted = {
+                let had_interaction = {
                     let mut st = state.borrow_mut();
                     let adjusted = st.drag.is_some();
+                    let panned = st.pan_drag_start.is_some();
                     st.drag = None;
+                    st.pan_drag_start = None;
                     st.selected_mode = None;
                     if adjusted {
                         st.status = "Frame adjusted.".into();
                     }
-                    adjusted
+                    adjusted || panned
                 };
 
-                if adjusted {
+                if had_interaction {
                     refresh_ui(&state.borrow(), &ui);
                     ui.drawing.queue_draw();
                 }
