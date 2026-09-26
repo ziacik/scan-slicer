@@ -57,6 +57,8 @@ jobs:
             "$pkgroot/usr/share/applications/com.github.ziacik.ScanSlicer.desktop"
           install -Dm644 packaging/com.github.ziacik.ScanSlicer.svg \
             "$pkgroot/usr/share/icons/hicolor/scalable/apps/com.github.ziacik.ScanSlicer.svg"
+          install -Dm644 packaging/com.github.ziacik.ScanSlicer.metainfo.xml \
+            "$pkgroot/usr/share/metainfo/com.github.ziacik.ScanSlicer.metainfo.xml"
           install -Dm644 LICENSE "$pkgroot/usr/share/doc/scan-slicer/copyright"
 
           cat > "$pkgroot/DEBIAN/control" <<EOF
@@ -93,6 +95,8 @@ jobs:
             "$appdir/usr/share/applications/com.github.ziacik.ScanSlicer.desktop"
           install -m644 packaging/com.github.ziacik.ScanSlicer.svg \
             "$appdir/usr/share/icons/hicolor/scalable/apps/com.github.ziacik.ScanSlicer.svg"
+          install -Dm644 packaging/com.github.ziacik.ScanSlicer.metainfo.xml \
+            "$appdir/usr/share/metainfo/com.github.ziacik.ScanSlicer.metainfo.xml"
 
           curl --fail --location --retry 3 \
             -o linuxdeploy-x86_64.AppImage \
@@ -161,6 +165,7 @@ jobs:
           cp target/release/scan-slicer "$builddir/scan-slicer"
           cp packaging/com.github.ziacik.ScanSlicer.desktop "$builddir/"
           cp packaging/com.github.ziacik.ScanSlicer.svg "$builddir/"
+          cp packaging/com.github.ziacik.ScanSlicer.metainfo.xml "$builddir/"
           cp LICENSE "$builddir/"
 
           cat > "$builddir/PKGBUILD" <<EOF
@@ -173,8 +178,8 @@ jobs:
           license=('MIT')
           depends=('gtk4' 'libadwaita')
           optdepends=('sane: scanner acquisition support')
-          source=('scan-slicer' 'com.github.ziacik.ScanSlicer.desktop' 'com.github.ziacik.ScanSlicer.svg' 'LICENSE')
-          sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
+          source=('scan-slicer' 'com.github.ziacik.ScanSlicer.desktop' 'com.github.ziacik.ScanSlicer.svg' 'com.github.ziacik.ScanSlicer.metainfo.xml' 'LICENSE')
+          sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
           package() {
             install -Dm755 "\$srcdir/scan-slicer" "\$pkgdir/usr/bin/scan-slicer"
@@ -182,6 +187,8 @@ jobs:
               "\$pkgdir/usr/share/applications/com.github.ziacik.ScanSlicer.desktop"
             install -Dm644 "\$srcdir/com.github.ziacik.ScanSlicer.svg" \
               "\$pkgdir/usr/share/icons/hicolor/scalable/apps/com.github.ziacik.ScanSlicer.svg"
+            install -Dm644 "\$srcdir/com.github.ziacik.ScanSlicer.metainfo.xml" \
+              "\$pkgdir/usr/share/metainfo/com.github.ziacik.ScanSlicer.metainfo.xml"
             install -Dm644 "\$srcdir/LICENSE" "\$pkgdir/usr/share/licenses/scan-slicer/LICENSE"
           }
           EOF
