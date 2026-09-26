@@ -210,6 +210,7 @@ struct Ui {
     window: adw::ApplicationWindow,
     drawing: gtk::DrawingArea,
     empty_page: adw::StatusPage,
+    empty_open_button: gtk::Button,
     source_row: adw::ActionRow,
     frames_row: adw::ActionRow,
     selected_row: adw::ActionRow,
@@ -359,6 +360,11 @@ fn build_ui(app: &adw::Application) {
     empty_page.set_can_target(false);
     empty_page.add_css_class("canvas-empty-page");
 
+    let empty_open_button = gtk::Button::with_label("Open Scan…");
+    empty_open_button.add_css_class("suggested-action");
+    empty_open_button.set_halign(gtk::Align::Center);
+    empty_page.set_child(Some(&empty_open_button));
+
     let canvas_overlay = gtk::Overlay::new();
     canvas_overlay.set_child(Some(&drawing));
     canvas_overlay.add_overlay(&empty_page);
@@ -387,6 +393,7 @@ fn build_ui(app: &adw::Application) {
         window,
         drawing,
         empty_page,
+        empty_open_button,
         source_row,
         frames_row,
         selected_row,
@@ -463,6 +470,15 @@ fn install_css() {
 }
 
 fn connect_actions(state: &Rc<RefCell<AppState>>, ui: &Ui) {
+    {
+        let state = state.clone();
+        let ui = ui.clone();
+        let button = ui.empty_open_button.clone();
+        button.connect_clicked(move |_| {
+            choose_and_load(state.clone(), ui.clone());
+        });
+    }
+
     {
         let state = state.clone();
         let ui = ui.clone();
@@ -1207,6 +1223,7 @@ fn refresh_ui(state: &AppState, ui: &Ui) {
 
     let idle = state.busy == Busy::None;
     ui.open_button.set_sensitive(idle);
+    ui.empty_open_button.set_sensitive(idle);
     ui.detect_button
         .set_sensitive(idle && state.image.is_some());
     ui.export_button
