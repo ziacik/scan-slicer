@@ -57,7 +57,7 @@ pub(crate) fn scan(device_id: &str, resolution: u32) -> Result<DynamicImage, Str
 
 fn parse_device_line(line: &str) -> Option<ScannerDevice> {
     let line = line.trim();
-    let (rest, closing) = if let Some(rest) = line.strip_prefix("device \`") {
+    let (rest, closing) = if let Some(rest) = line.strip_prefix("device `") {
         (rest, '\'')
     } else if let Some(rest) = line.strip_prefix("device '") {
         (rest, '\'')
@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn parses_standard_sane_device_line() {
         let device = parse_device_line(
-            "device \`airscan:e0:Example Scanner' is a WSD Example Scanner ip=192.168.1.10",
+            "device `airscan:e0:Example Scanner' is a WSD Example Scanner ip=192.168.1.10",
         )
         .unwrap();
 
