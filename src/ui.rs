@@ -253,8 +253,8 @@ fn build_ui(app: &adw::Application) {
     let title = adw::WindowTitle::new("Scan Slicer", "Photo sheet editor");
     header.set_title_widget(Some(&title));
 
-    let open_button = icon_button("document-open-symbolic", "Open scan");
-    let detect_button = icon_button("view-refresh-symbolic", "Detect photos");
+    let open_button = labeled_icon_button("document-open-symbolic", "Open", "Open scan");
+    let detect_button = labeled_icon_button("view-refresh-symbolic", "Detect", "Detect photos");
     let undo_button = icon_button("edit-undo-symbolic", "Undo");
     let redo_button = icon_button("edit-redo-symbolic", "Redo");
     let fit_button = icon_button("zoom-fit-best-symbolic", "Fit image to window");
@@ -409,6 +409,17 @@ fn build_ui(app: &adw::Application) {
 
 fn icon_button(icon_name: &str, tooltip: &str) -> gtk::Button {
     let button = gtk::Button::builder().icon_name(icon_name).build();
+    button.set_tooltip_text(Some(tooltip));
+    button
+}
+
+fn labeled_icon_button(icon_name: &str, label: &str, tooltip: &str) -> gtk::Button {
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    content.append(&gtk::Image::from_icon_name(icon_name));
+    content.append(&gtk::Label::new(Some(label)));
+
+    let button = gtk::Button::new();
+    button.set_child(Some(&content));
     button.set_tooltip_text(Some(tooltip));
     button
 }
