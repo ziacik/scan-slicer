@@ -357,6 +357,7 @@ fn build_ui(app: &adw::Application) {
         .description("PNG, JPEG or TIFF")
         .build();
     empty_page.set_can_target(false);
+    empty_page.add_css_class("canvas-empty-page");
 
     let canvas_overlay = gtk::Overlay::new();
     canvas_overlay.set_child(Some(&drawing));
@@ -438,6 +439,16 @@ fn install_css() {
 
         .sidebar {
             padding: 0;
+        }
+
+        .canvas-empty-page,
+        .canvas-empty-page label,
+        .canvas-empty-page image {
+            color: #f6f5f4;
+        }
+
+        .canvas-empty-page .dim-label {
+            color: rgba(246, 245, 244, 0.72);
         }
         ",
     );
