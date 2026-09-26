@@ -479,9 +479,15 @@ impl eframe::App for SlicerApp {
 
                 ui.separator();
                 ui.label("Detection");
-                let threshold_changed = ui
-                    .add(egui::Slider::new(&mut self.threshold, 5..=80).text("threshold"))
-                    .changed();
+
+                let openai_configured = std::env::var_os("OPENAI_API_KEY").is_some();
+                let threshold_changed = if openai_configured {
+                    false
+                } else {
+                    ui.add(egui::Slider::new(&mut self.threshold, 5..=80).text("threshold"))
+                        .changed()
+                };
+
                 let margin_changed = ui
                     .add(egui::Slider::new(&mut self.margin, 0..=100).text("margin px"))
                     .changed();
