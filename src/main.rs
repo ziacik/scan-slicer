@@ -8,14 +8,57 @@ use std::{
 };
 
 use eframe::egui::{
-    self, Color32, ColorImage, CursorIcon, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle,
-    TextureOptions, Vec2,
+    self, Align, Color32, ColorImage, CursorIcon, FontId, Layout, Pos2, Rect, RichText, Sense,
+    Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2,
 };
 use image::DynamicImage;
 
 use crate::detection::{detect_photos, PhotoRect};
 
 const HANDLE_RADIUS: f32 = 7.0;
+
+fn accent() -> Color32 {
+    Color32::from_rgb(96, 137, 255)
+}
+
+fn accent_hover() -> Color32 {
+    Color32::from_rgb(114, 151, 255)
+}
+
+fn surface() -> Color32 {
+    Color32::from_rgb(29, 32, 40)
+}
+
+fn workspace() -> Color32 {
+    Color32::from_rgb(17, 19, 24)
+}
+
+fn border() -> Color32 {
+    Color32::from_rgb(55, 60, 72)
+}
+
+fn muted() -> Color32 {
+    Color32::from_rgb(154, 161, 177)
+}
+
+fn action_button(ui: &mut egui::Ui, label: &str, enabled: bool, primary: bool) -> bool {
+    let fill = if primary { accent() } else { surface() };
+    let stroke = if primary {
+        Stroke::new(1.0, accent())
+    } else {
+        Stroke::new(1.0, border())
+    };
+
+    ui.add_enabled(
+        enabled,
+        egui::Button::new(RichText::new(label).size(14.0).strong())
+            .min_size(Vec2::new(ui.available_width(), 42.0))
+            .fill(fill)
+            .stroke(stroke)
+            .corner_radius(9),
+    )
+    .clicked()
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DragMode {
@@ -74,6 +117,22 @@ impl SlicerApp {
         let (job_tx, job_rx) = mpsc::channel::<DetectionJob>();
         let (result_tx, result_rx) = mpsc::channel::<DetectionResult>();
         let (load_tx, load_rx) = mpsc::channel::<LoadResult>();
+
+        let mut visuals = egui::Visuals::dark();
+        visuals.panel_fill = Color32::from_rgb(23, 25, 31);
+        visuals.window_fill = Color32::from_rgb(23, 25, 31);
+        visuals.extreme_bg_color = workspace();
+        visuals.faint_bg_color = surface();
+        visuals.selection.bg_fill = accent();
+        visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+        visuals.hyperlink_color = accent_hover();
+        _cc.egui_ctx.set_visuals(visuals);
+
+        let mut style = (*_cc.egui_ctx.style()).clone();
+        style.spacing.item_spacing = Vec2::new(10.0, 10.0);
+        style.spacing.button_padding = Vec2::new(14.0, 9.0);
+        style.spacing.interact_size.y = 38.0;
+        _cc.egui_ctx.set_style(style);
 
         thread::spawn(move || {
             while let Ok(job) = job_rx.recv() {
@@ -286,27 +345,78 @@ impl SlicerApp {
     }
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
+        let available = ui.available_size();
+        let (workspace_rect, _) = ui.allocate_exact_size(available, Sense::hover());
+        let painter = ui.painter_at(workspace_rect);
+        painter.rect_filled(workspace_rect, 0.0, workspace());
+
         let (Some(texture), Some(image)) = (self.texture.as_ref(), self.image.as_ref()) else {
-            ui.centered_and_justified(|ui| {
-                ui.label("Open a scan to start slicing.");
-            });
+            let card = Rect::from_center_size(
+                workspace_rect.center(),
+                Vec2::new(
+                    390.0_f32.min(workspace_rect.width() - 40.0).max(240.0),
+                    190.0_f32.min(workspace_rect.height() - 40.0).max(140.0),
+                ),
+            );
+            painter.rect_filled(card, 18.0, surface());
+            painter.rect_stroke(
+                card,
+                18.0,
+                Stroke::new(1.0, border()),
+                StrokeKind::Inside,
+            );
+            painter.text(
+                card.center() - Vec2::new(0.0, 24.0),
+                egui::Align2::CENTER_CENTER,
+                "Open a scanned sheet",
+                FontId::proportional(20.0),
+                Color32::WHITE,
+            );
+            painter.text(
+                card.center() + Vec2::new(0.0, 14.0),
+                egui::Align2::CENTER_CENTER,
+                "Photos will be detected automatically.",
+                FontId::proportional(14.0),
+                muted(),
+            );
             return;
         };
 
-        let available = ui.available_size();
         let source = Vec2::new(image.width() as f32, image.height() as f32);
-        let scale = (available.x / source.x)
-            .min(available.y / source.y)
+        let padded = Vec2::new(
+            (workspace_rect.width() - 64.0).max(1.0),
+            (workspace_rect.height() - 64.0).max(1.0),
+        );
+        let scale = (padded.x / source.x)
+            .min(padded.y / source.y)
             .min(1.0)
             .max(0.01);
         let display = source * scale;
+        let canvas = Rect::from_center_size(workspace_rect.center(), display);
 
-        let response = ui.add(
-            egui::Image::new((texture.id(), display))
-                .sense(Sense::click_and_drag())
-                .maintain_aspect_ratio(true),
+        painter.rect_filled(
+            canvas.expand(12.0),
+            14.0,
+            Color32::from_black_alpha(85),
         );
-        let canvas = response.rect;
+        painter.image(
+            texture.id(),
+            canvas,
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+            Color32::WHITE,
+        );
+        painter.rect_stroke(
+            canvas,
+            2.0,
+            Stroke::new(1.0, Color32::from_white_alpha(35)),
+            StrokeKind::Outside,
+        );
+
+        let response = ui.interact(
+            canvas,
+            ui.id().with("scan_canvas"),
+            Sense::click_and_drag(),
+        );
 
         if let Some(pointer) = response.interact_pointer_pos() {
             let image_pos = |p: Pos2| -> Pos2 {
@@ -343,6 +453,11 @@ impl SlicerApp {
                         _ => CursorIcon::ResizeNwSe,
                     });
                 }
+            } else if let Some((_, mode)) = self.hit_test(pointer, canvas, scale) {
+                ui.ctx().set_cursor_icon(match mode {
+                    DragMode::Move => CursorIcon::Grab,
+                    _ => CursorIcon::ResizeNwSe,
+                });
             }
 
             if response.drag_stopped() {
@@ -354,15 +469,15 @@ impl SlicerApp {
             }
         }
 
-        let painter = ui.painter_at(canvas);
         for (index, rect) in self.boxes.iter().enumerate() {
             let screen = rect_to_screen(*rect, canvas, scale);
             let selected = self.selected == Some(index);
-            let stroke = if selected {
-                Stroke::new(2.5_f32, Color32::YELLOW)
+            let box_color = if selected {
+                Color32::WHITE
             } else {
-                Stroke::new(2.0_f32, Color32::from_rgb(255, 80, 80))
+                Color32::from_rgb(116, 158, 255)
             };
+            let stroke = Stroke::new(if selected { 2.5 } else { 2.0 }, box_color);
 
             let points = rect_screen_corners(*rect, canvas, scale);
             if rect.corners.is_some() {
@@ -370,7 +485,7 @@ impl SlicerApp {
                     painter.line_segment([points[i], points[(i + 1) % 4]], stroke);
                 }
             } else {
-                painter.rect_stroke(screen, 0.0, stroke, StrokeKind::Outside);
+                painter.rect_stroke(screen, 2.0, stroke, StrokeKind::Outside);
             }
 
             let badge_origin = points
@@ -383,25 +498,33 @@ impl SlicerApp {
                 })
                 .unwrap_or(screen.min);
             let badge = Rect::from_min_size(
-                badge_origin + Vec2::new(4.0, 4.0),
-                Vec2::new(26.0, 22.0),
+                badge_origin + Vec2::new(7.0, 7.0),
+                Vec2::new(28.0, 24.0),
             );
-            painter.rect_filled(badge, 4.0, Color32::from_black_alpha(170));
+            painter.rect_filled(
+                badge,
+                7.0,
+                if selected {
+                    accent()
+                } else {
+                    Color32::from_black_alpha(190)
+                },
+            );
             painter.text(
                 badge.center(),
                 egui::Align2::CENTER_CENTER,
                 format!("{}", index + 1),
-                egui::FontId::proportional(14.0),
+                FontId::proportional(13.0),
                 Color32::WHITE,
             );
 
             if selected {
                 for point in points {
-                    painter.circle_filled(point, HANDLE_RADIUS, Color32::YELLOW);
+                    painter.circle_filled(point, HANDLE_RADIUS, accent());
                     painter.circle_stroke(
                         point,
                         HANDLE_RADIUS,
-                        Stroke::new(1.0_f32, Color32::BLACK),
+                        Stroke::new(2.0, Color32::WHITE),
                     );
                 }
             }
@@ -440,71 +563,192 @@ impl eframe::App for SlicerApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                if ui.add_enabled(!self.loading, egui::Button::new("Open scan")).clicked() {
+        egui::TopBottomPanel::top("app_header")
+            .exact_height(72.0)
+            .show(ctx, |ui| {
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(18.0);
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("Scan Slicer").size(21.0).strong());
+                        ui.label(
+                            RichText::new("Split scanned photo sheets into clean image files")
+                                .size(12.5)
+                                .color(muted()),
+                        );
+                    });
+
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.add_space(18.0);
+                        if self.loading || self.detecting {
+                            ui.spinner();
+                        }
+                        ui.label(
+                            RichText::new(format!(
+                                "{} frame{}",
+                                self.boxes.len(),
+                                if self.boxes.len() == 1 { "" } else { "s" }
+                            ))
+                            .size(13.0)
+                            .color(muted()),
+                        );
+                    });
+                });
+            });
+
+        egui::SidePanel::left("sidebar")
+            .exact_width(280.0)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.add_space(18.0);
+                ui.label(RichText::new("SOURCE").size(11.0).strong().color(muted()));
+                ui.add_space(6.0);
+
+                if let (Some(path), Some(image)) = (self.image_path.as_ref(), self.image.as_ref()) {
+                    ui.label(
+                        RichText::new(
+                            path.file_name()
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("Loaded scan"),
+                        )
+                        .size(15.0)
+                        .strong(),
+                    );
+                    ui.label(
+                        RichText::new(format!("{} × {} px", image.width(), image.height()))
+                            .size(12.5)
+                            .color(muted()),
+                    );
+                } else {
+                    ui.label(RichText::new("No scan loaded").size(15.0).strong());
+                    ui.label(
+                        RichText::new("PNG, JPG or TIFF")
+                            .size(12.5)
+                            .color(muted()),
+                    );
+                }
+
+                ui.add_space(18.0);
+                if action_button(ui, "Open scan", !self.loading, false) {
                     self.open_image(ctx);
                 }
-                if ui
-                    .add_enabled(
-                        self.image.is_some() && !self.detecting && !self.loading,
-                        egui::Button::new("Detect photos"),
-                    )
-                    .clicked()
-                {
+                if action_button(
+                    ui,
+                    if self.detecting { "Detecting…" } else { "Detect photos" },
+                    self.image.is_some() && !self.detecting && !self.loading,
+                    false,
+                ) {
                     self.redetect();
                 }
-                if ui
-                    .add_enabled(self.image.is_some(), egui::Button::new("+ Add frame"))
-                    .clicked()
-                {
-                    self.add_box();
-                }
-                if ui
-                    .add_enabled(self.selected.is_some(), egui::Button::new("Delete frame"))
-                    .clicked()
-                {
-                    self.remove_selected();
-                }
-                if ui
-                    .add_enabled(!self.boxes.is_empty(), egui::Button::new("Export PNGs"))
-                    .clicked()
-                {
-                    self.export();
-                }
 
+                ui.add_space(10.0);
                 ui.separator();
+                ui.add_space(10.0);
 
+                ui.label(RichText::new("FRAMES").size(11.0).strong().color(muted()));
+                ui.add_space(6.0);
+
+                ui.horizontal(|ui| {
+                    let half = (ui.available_width() - 8.0) / 2.0;
+                    if ui
+                        .add_enabled(
+                            self.image.is_some(),
+                            egui::Button::new(RichText::new("+ Add").strong())
+                                .min_size(Vec2::new(half, 38.0))
+                                .fill(surface())
+                                .stroke(Stroke::new(1.0, border()))
+                                .corner_radius(9),
+                        )
+                        .clicked()
+                    {
+                        self.add_box();
+                    }
+
+                    if ui
+                        .add_enabled(
+                            self.selected.is_some(),
+                            egui::Button::new("Delete")
+                                .min_size(Vec2::new(half, 38.0))
+                                .fill(surface())
+                                .stroke(Stroke::new(1.0, border()))
+                                .corner_radius(9),
+                        )
+                        .clicked()
+                    {
+                        self.remove_selected();
+                    }
+                });
+
+                ui.add_space(16.0);
+                ui.label(RichText::new("Crop padding").size(13.0).strong());
+                ui.label(
+                    RichText::new("Add a little space around every detected photo.")
+                        .size(12.0)
+                        .color(muted()),
+                );
                 let margin_changed = ui
-                    .add(egui::Slider::new(&mut self.margin, 0..=100).text("extra margin px"))
+                    .add(egui::Slider::new(&mut self.margin, 0..=100).suffix(" px"))
                     .changed();
-
                 if margin_changed && self.image.is_some() {
-                    self.status = "Settings changed — click Detect photos.".into();
+                    self.status = "Crop padding changed — run detection again.".into();
                 }
-            });
-        });
 
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(&self.status);
                 if let Some(index) = self.selected {
                     if let Some(rect) = self.boxes.get(index) {
+                        ui.add_space(16.0);
                         ui.separator();
-                        ui.label(format!(
-                            "Frame {}: {}×{} at {},{}",
-                            index + 1,
-                            rect.w,
-                            rect.h,
-                            rect.x,
-                            rect.y
-                        ));
+                        ui.add_space(12.0);
+                        ui.label(
+                            RichText::new(format!("Frame {}", index + 1))
+                                .size(13.0)
+                                .strong(),
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "{} × {} px  ·  x {}, y {}",
+                                rect.w, rect.h, rect.x, rect.y
+                            ))
+                            .size(12.0)
+                            .color(muted()),
+                        );
                     }
                 }
-            });
-        });
 
-        egui::CentralPanel::default().show(ctx, |ui| self.canvas(ui));
+                ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+                    ui.add_space(18.0);
+                    if action_button(
+                        ui,
+                        "Export PNGs",
+                        !self.boxes.is_empty() && !self.loading,
+                        true,
+                    ) {
+                        self.export();
+                    }
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new("Drag a frame to move it. Drag its corners to resize.")
+                            .size(11.5)
+                            .color(muted()),
+                    );
+                });
+            });
+
+        egui::TopBottomPanel::bottom("status")
+            .exact_height(42.0)
+            .show(ctx, |ui| {
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(12.0);
+                    if self.loading || self.detecting {
+                        ui.spinner();
+                    }
+                    ui.label(RichText::new(&self.status).size(12.5).color(muted()));
+                });
+            });
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(workspace()))
+            .show(ctx, |ui| self.canvas(ui));
     }
 }
 
@@ -590,14 +834,14 @@ fn apply_drag(
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Slicer")
+            .with_title("Scan Slicer")
             .with_inner_size([1200.0, 820.0])
             .with_min_inner_size([720.0, 480.0]),
         ..Default::default()
     };
 
     eframe::run_native(
-        "Slicer",
+        "Scan Slicer",
         options,
         Box::new(|cc| Ok(Box::new(SlicerApp::new(cc)))),
     )
