@@ -25,44 +25,75 @@ const MAGNIFIER_SIZE: f32 = 150.0;
 const MAGNIFIER_ZOOM: f32 = 5.0;
 
 fn accent() -> Color32 {
-    Color32::from_rgb(96, 137, 255)
+    // GNOME/libadwaita blue.
+    Color32::from_rgb(53, 132, 228)
 }
 
 fn accent_hover() -> Color32 {
-    Color32::from_rgb(114, 151, 255)
+    Color32::from_rgb(28, 113, 216)
+}
+
+fn panel_bg() -> Color32 {
+    Color32::from_rgb(246, 245, 244)
 }
 
 fn surface() -> Color32 {
-    Color32::from_rgb(29, 32, 40)
+    Color32::WHITE
 }
 
 fn workspace() -> Color32 {
-    Color32::from_rgb(17, 19, 24)
+    Color32::from_rgb(36, 36, 36)
 }
 
 fn border() -> Color32 {
-    Color32::from_rgb(55, 60, 72)
+    Color32::from_rgb(218, 216, 214)
 }
 
 fn muted() -> Color32 {
-    Color32::from_rgb(154, 161, 177)
+    Color32::from_rgb(119, 118, 123)
+}
+
+fn canvas_muted() -> Color32 {
+    Color32::from_rgb(190, 190, 190)
+}
+
+fn destructive() -> Color32 {
+    Color32::from_rgb(192, 28, 40)
 }
 
 fn action_button(ui: &mut egui::Ui, label: &str, enabled: bool, primary: bool) -> bool {
-    let fill = if primary { accent() } else { surface() };
-    let stroke = if primary {
-        Stroke::new(1.0, accent())
+    let fill = if !enabled {
+        Color32::from_rgb(224, 222, 220)
+    } else if primary {
+        accent()
+    } else {
+        surface()
+    };
+    let stroke = if primary && enabled {
+        Stroke::NONE
     } else {
         Stroke::new(1.0, border())
+    };
+    let text_color = if !enabled {
+        Color32::from_rgb(146, 144, 141)
+    } else if primary {
+        Color32::WHITE
+    } else {
+        Color32::from_rgb(45, 45, 45)
     };
 
     ui.add_enabled(
         enabled,
-        egui::Button::new(RichText::new(label).size(14.0).strong())
-            .min_size(Vec2::new(ui.available_width(), 42.0))
-            .fill(fill)
-            .stroke(stroke)
-            .corner_radius(9),
+        egui::Button::new(
+            RichText::new(label)
+                .size(13.5)
+                .strong()
+                .color(text_color),
+        )
+        .min_size(Vec2::new(ui.available_width(), 38.0))
+        .fill(fill)
+        .stroke(stroke)
+        .corner_radius(8),
     )
     .clicked()
 }
@@ -158,20 +189,24 @@ impl SlicerApp {
         let (load_tx, load_rx) = mpsc::channel::<LoadResult>();
         let (export_tx, export_rx) = mpsc::channel::<ExportEvent>();
 
-        let mut visuals = egui::Visuals::dark();
-        visuals.panel_fill = Color32::from_rgb(23, 25, 31);
-        visuals.window_fill = Color32::from_rgb(23, 25, 31);
-        visuals.extreme_bg_color = workspace();
-        visuals.faint_bg_color = surface();
+        let mut visuals = egui::Visuals::light();
+        visuals.panel_fill = panel_bg();
+        visuals.window_fill = panel_bg();
+        visuals.extreme_bg_color = Color32::from_rgb(235, 233, 231);
+        visuals.faint_bg_color = Color32::from_rgb(238, 237, 235);
         visuals.selection.bg_fill = accent();
-        visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+        visuals.selection.stroke = Stroke::new(1.0, accent());
         visuals.hyperlink_color = accent_hover();
+        visuals.widgets.inactive.bg_fill = Color32::from_rgb(238, 237, 235);
+        visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(238, 237, 235);
+        visuals.widgets.hovered.bg_fill = Color32::from_rgb(229, 227, 224);
+        visuals.widgets.active.bg_fill = Color32::from_rgb(220, 218, 215);
         _cc.egui_ctx.set_visuals(visuals);
 
         let mut style = (*_cc.egui_ctx.style()).clone();
-        style.spacing.item_spacing = Vec2::new(10.0, 10.0);
-        style.spacing.button_padding = Vec2::new(14.0, 9.0);
-        style.spacing.interact_size.y = 38.0;
+        style.spacing.item_spacing = Vec2::new(8.0, 8.0);
+        style.spacing.button_padding = Vec2::new(12.0, 7.0);
+        style.spacing.interact_size.y = 34.0;
         _cc.egui_ctx.set_style(style);
 
         thread::spawn(move || {
@@ -601,33 +636,56 @@ impl SlicerApp {
             self.texture.clone(),
             self.image.as_ref().map(Arc::clone),
         ) else {
-            let card = Rect::from_center_size(
-                workspace_rect.center(),
-                Vec2::new(
-                    390.0_f32.min(workspace_rect.width() - 40.0).max(240.0),
-                    190.0_f32.min(workspace_rect.height() - 40.0).max(140.0),
-                ),
+            let center = workspace_rect.center();
+            let icon = Rect::from_center_size(
+                center - Vec2::new(0.0, 54.0),
+                Vec2::new(52.0, 40.0),
             );
-            painter.rect_filled(card, 18.0, surface());
             painter.rect_stroke(
-                card,
-                18.0,
-                Stroke::new(1.0, border()),
+                icon,
+                7.0,
+                Stroke::new(2.0, Color32::from_rgb(150, 150, 150)),
                 StrokeKind::Inside,
             );
-            painter.text(
-                card.center() - Vec2::new(0.0, 24.0),
-                egui::Align2::CENTER_CENTER,
-                "Open a scanned sheet",
-                FontId::proportional(20.0),
-                Color32::WHITE,
+            painter.circle_filled(
+                icon.left_top() + Vec2::new(14.0, 13.0),
+                4.0,
+                Color32::from_rgb(150, 150, 150),
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(icon.left() + 7.0, icon.bottom() - 9.0),
+                    Pos2::new(icon.left() + 21.0, icon.top() + 22.0),
+                ],
+                Stroke::new(2.0, Color32::from_rgb(150, 150, 150)),
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(icon.left() + 21.0, icon.top() + 22.0),
+                    Pos2::new(icon.left() + 30.0, icon.bottom() - 14.0),
+                ],
+                Stroke::new(2.0, Color32::from_rgb(150, 150, 150)),
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(icon.left() + 30.0, icon.bottom() - 14.0),
+                    Pos2::new(icon.right() - 7.0, icon.bottom() - 9.0),
+                ],
+                Stroke::new(2.0, Color32::from_rgb(150, 150, 150)),
             );
             painter.text(
-                card.center() + Vec2::new(0.0, 14.0),
+                center + Vec2::new(0.0, 4.0),
                 egui::Align2::CENTER_CENTER,
-                "Photos will be detected automatically.",
-                FontId::proportional(14.0),
-                muted(),
+                "Open a scan to begin",
+                FontId::proportional(19.0),
+                Color32::from_rgb(238, 238, 238),
+            );
+            painter.text(
+                center + Vec2::new(0.0, 34.0),
+                egui::Align2::CENTER_CENTER,
+                "PNG, JPEG or TIFF",
+                FontId::proportional(13.0),
+                canvas_muted(),
             );
             return;
         };
@@ -934,213 +992,314 @@ impl eframe::App for SlicerApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 
-        egui::TopBottomPanel::top("app_header")
-            .exact_height(72.0)
-            .show(ctx, |ui| {
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(18.0);
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("Scan Slicer").size(21.0).strong());
-                        ui.label(
-                            RichText::new("Split scanned photo sheets into clean image files")
-                                .size(12.5)
-                                .color(muted()),
-                        );
-                    });
-
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.add_space(18.0);
-                        if self.loading || self.detecting || self.exporting {
-                            ui.add(egui::Spinner::new().size(16.0));
-                        }
-                        ui.label(
-                            RichText::new(format!(
-                                "{} frame{}",
-                                self.boxes.len(),
-                                if self.boxes.len() == 1 { "" } else { "s" }
-                            ))
-                            .size(13.0)
-                            .color(muted()),
-                        );
-                    });
-                });
-            });
-
         egui::SidePanel::left("sidebar")
-            .exact_width(280.0)
+            .exact_width(300.0)
             .resizable(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(panel_bg())
+                    .inner_margin(egui::Margin::same(14)),
+            )
             .show(ctx, |ui| {
-                ui.add_space(18.0);
-                ui.label(RichText::new("SOURCE").size(11.0).strong().color(muted()));
-                ui.add_space(6.0);
-
-                if let (Some(path), Some(image)) = (self.image_path.as_ref(), self.image.as_ref()) {
-                    ui.label(
-                        RichText::new(
-                            path.file_name()
-                                .and_then(|name| name.to_str())
-                                .unwrap_or("Loaded scan"),
-                        )
-                        .size(15.0)
-                        .strong(),
-                    );
-                    ui.label(
-                        RichText::new(format!("{} × {} px", image.width(), image.height()))
-                            .size(12.5)
-                            .color(muted()),
-                    );
-                } else {
-                    ui.label(RichText::new("No scan loaded").size(15.0).strong());
-                    ui.label(
-                        RichText::new("PNG, JPG or TIFF")
-                            .size(12.5)
-                            .color(muted()),
-                    );
-                }
-
-                ui.add_space(18.0);
-                if action_button(ui, "Open scan", !self.loading && !self.exporting, false) {
-                    self.open_image(ctx);
-                }
-                if action_button(
-                    ui,
-                    if self.detecting { "Detecting…" } else { "Detect photos" },
-                    self.image.is_some() && !self.detecting && !self.loading && !self.exporting,
-                    false,
-                ) {
-                    self.redetect();
-                }
-
-                ui.add_space(10.0);
-                ui.separator();
-                ui.add_space(10.0);
-
-                ui.label(RichText::new("FRAMES").size(11.0).strong().color(muted()));
-                ui.add_space(6.0);
-
-                ui.horizontal(|ui| {
-                    let half = (ui.available_width() - 8.0) / 2.0;
-                    if ui
-                        .add_enabled(
-                            self.image.is_some() && !self.exporting,
-                            egui::Button::new(RichText::new("+ Add").strong())
-                                .min_size(Vec2::new(half, 38.0))
-                                .fill(surface())
-                                .stroke(Stroke::new(1.0, border()))
-                                .corner_radius(9),
-                        )
-                        .clicked()
-                    {
-                        self.add_box();
-                    }
-
-                    if ui
-                        .add_enabled(
-                            self.selected.is_some() && !self.exporting,
-                            egui::Button::new("Delete")
-                                .min_size(Vec2::new(half, 38.0))
-                                .fill(surface())
-                                .stroke(Stroke::new(1.0, border()))
-                                .corner_radius(9),
-                        )
-                        .clicked()
-                    {
-                        self.remove_selected();
-                    }
-                });
-
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    let half = (ui.available_width() - 8.0) / 2.0;
-                    if ui
-                        .add_enabled(
-                            !self.undo_stack.is_empty() && !self.exporting,
-                            egui::Button::new("Undo")
-                                .min_size(Vec2::new(half, 34.0))
-                                .fill(surface())
-                                .stroke(Stroke::new(1.0, border()))
-                                .corner_radius(9),
-                        )
-                        .clicked()
-                    {
-                        self.undo();
-                    }
-
-                    if ui
-                        .add_enabled(
-                            !self.redo_stack.is_empty() && !self.exporting,
-                            egui::Button::new("Redo")
-                                .min_size(Vec2::new(half, 34.0))
-                                .fill(surface())
-                                .stroke(Stroke::new(1.0, border()))
-                                .corner_radius(9),
-                        )
-                        .clicked()
-                    {
-                        self.redo();
-                    }
-                });
-
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(format!("View: {}%", (self.zoom * 100.0).round() as u32))
-                            .size(12.0)
-                            .color(muted()),
-                    );
-                    if ui
-                        .add_enabled(
-                            self.zoom > 1.001 || self.pan.length_sq() > 0.5,
-                            egui::Button::new("Reset view").small(),
-                        )
-                        .clicked()
-                    {
-                        self.zoom = 1.0;
-                        self.pan = Vec2::ZERO;
-                    }
-                });
-
-                ui.add_space(16.0);
-                ui.label(RichText::new("Crop padding").size(13.0).strong());
+                ui.add_space(4.0);
                 ui.label(
-                    RichText::new("Add a little space around every detected photo.")
-                        .size(12.0)
-                        .color(muted()),
+                    RichText::new("Scan")
+                        .size(18.0)
+                        .strong()
+                        .color(Color32::from_rgb(45, 45, 45)),
                 );
-                let margin_changed = ui
-                    .add(egui::Slider::new(&mut self.margin, 0..=100).suffix(" px"))
-                    .changed();
-                if margin_changed && self.image.is_some() {
-                    self.status = "Crop padding changed — run detection again.".into();
-                }
+                ui.add_space(6.0);
 
-                if let Some(index) = self.selected {
-                    if let Some(rect) = self.boxes.get(index) {
-                        ui.add_space(16.0);
-                        ui.separator();
-                        ui.add_space(12.0);
-                        ui.label(
-                            RichText::new(format!("Frame {}", index + 1))
-                                .size(13.0)
-                                .strong(),
-                        );
-                        ui.label(
-                            RichText::new(format!(
-                                "{} × {} px  ·  x {}, y {}",
-                                rect.w, rect.h, rect.x, rect.y
-                            ))
-                            .size(12.0)
-                            .color(muted()),
-                        );
-                    }
-                }
+                egui::Frame::new()
+                    .fill(surface())
+                    .stroke(Stroke::new(1.0, border()))
+                    .corner_radius(12)
+                    .inner_margin(egui::Margin::same(13))
+                    .show(ui, |ui| {
+                        if let (Some(path), Some(image)) =
+                            (self.image_path.as_ref(), self.image.as_ref())
+                        {
+                            ui.label(
+                                RichText::new(
+                                    path.file_name()
+                                        .and_then(|name| name.to_str())
+                                        .unwrap_or("Loaded scan"),
+                                )
+                                .size(14.0)
+                                .strong()
+                                .color(Color32::from_rgb(45, 45, 45)),
+                            );
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} × {} px",
+                                    image.width(),
+                                    image.height()
+                                ))
+                                .size(12.0)
+                                .color(muted()),
+                            );
+                        } else {
+                            ui.label(
+                                RichText::new("No scan loaded")
+                                    .size(14.0)
+                                    .strong()
+                                    .color(Color32::from_rgb(45, 45, 45)),
+                            );
+                            ui.label(
+                                RichText::new("Choose an image to get started")
+                                    .size(12.0)
+                                    .color(muted()),
+                            );
+                        }
+
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let gap = 8.0;
+                            let width = (available - gap) / 2.0;
+
+                            if ui
+                                .add_enabled(
+                                    !self.loading && !self.exporting,
+                                    egui::Button::new(
+                                        RichText::new("Open…")
+                                            .size(13.0)
+                                            .strong()
+                                            .color(Color32::from_rgb(45, 45, 45)),
+                                    )
+                                    .min_size(Vec2::new(width, 34.0))
+                                    .fill(Color32::from_rgb(238, 237, 235))
+                                    .stroke(Stroke::NONE)
+                                    .corner_radius(8),
+                                )
+                                .clicked()
+                            {
+                                self.open_image(ctx);
+                            }
+
+                            if ui
+                                .add_enabled(
+                                    self.image.is_some()
+                                        && !self.detecting
+                                        && !self.loading
+                                        && !self.exporting,
+                                    egui::Button::new(
+                                        RichText::new(if self.detecting {
+                                            "Detecting…"
+                                        } else {
+                                            "Detect"
+                                        })
+                                        .size(13.0)
+                                        .strong()
+                                        .color(Color32::from_rgb(45, 45, 45)),
+                                    )
+                                    .min_size(Vec2::new(width, 34.0))
+                                    .fill(Color32::from_rgb(238, 237, 235))
+                                    .stroke(Stroke::NONE)
+                                    .corner_radius(8),
+                                )
+                                .clicked()
+                            {
+                                self.redetect();
+                            }
+                        });
+                    });
+
+                ui.add_space(18.0);
+                ui.label(
+                    RichText::new("Frames")
+                        .size(18.0)
+                        .strong()
+                        .color(Color32::from_rgb(45, 45, 45)),
+                );
+                ui.add_space(6.0);
+
+                egui::Frame::new()
+                    .fill(surface())
+                    .stroke(Stroke::new(1.0, border()))
+                    .corner_radius(12)
+                    .inner_margin(egui::Margin::same(10))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let width = (ui.available_width() - 18.0) / 4.0;
+
+                            if ui
+                                .add_enabled(
+                                    self.image.is_some() && !self.exporting,
+                                    egui::Button::new("+")
+                                        .min_size(Vec2::new(width, 34.0))
+                                        .fill(Color32::from_rgb(238, 237, 235))
+                                        .stroke(Stroke::NONE)
+                                        .corner_radius(8),
+                                )
+                                .on_hover_text("Add frame")
+                                .clicked()
+                            {
+                                self.add_box();
+                            }
+
+                            if ui
+                                .add_enabled(
+                                    self.selected.is_some() && !self.exporting,
+                                    egui::Button::new(
+                                        RichText::new("−").color(destructive()).strong(),
+                                    )
+                                    .min_size(Vec2::new(width, 34.0))
+                                    .fill(Color32::from_rgb(238, 237, 235))
+                                    .stroke(Stroke::NONE)
+                                    .corner_radius(8),
+                                )
+                                .on_hover_text("Delete selected frame")
+                                .clicked()
+                            {
+                                self.remove_selected();
+                            }
+
+                            if ui
+                                .add_enabled(
+                                    !self.undo_stack.is_empty() && !self.exporting,
+                                    egui::Button::new("↶")
+                                        .min_size(Vec2::new(width, 34.0))
+                                        .fill(Color32::from_rgb(238, 237, 235))
+                                        .stroke(Stroke::NONE)
+                                        .corner_radius(8),
+                                )
+                                .on_hover_text("Undo")
+                                .clicked()
+                            {
+                                self.undo();
+                            }
+
+                            if ui
+                                .add_enabled(
+                                    !self.redo_stack.is_empty() && !self.exporting,
+                                    egui::Button::new("↷")
+                                        .min_size(Vec2::new(width, 34.0))
+                                        .fill(Color32::from_rgb(238, 237, 235))
+                                        .stroke(Stroke::NONE)
+                                        .corner_radius(8),
+                                )
+                                .on_hover_text("Redo")
+                                .clicked()
+                            {
+                                self.redo();
+                            }
+                        });
+
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} frame{}",
+                                    self.boxes.len(),
+                                    if self.boxes.len() == 1 { "" } else { "s" }
+                                ))
+                                .size(12.0)
+                                .color(muted()),
+                            );
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui
+                                    .add_enabled(
+                                        self.zoom > 1.001 || self.pan.length_sq() > 0.5,
+                                        egui::Button::new(
+                                            RichText::new("Reset view")
+                                                .size(12.0)
+                                                .color(accent_hover()),
+                                        )
+                                        .frame(false),
+                                    )
+                                    .clicked()
+                                {
+                                    self.zoom = 1.0;
+                                    self.pan = Vec2::ZERO;
+                                }
+
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{}%",
+                                        (self.zoom * 100.0).round() as u32
+                                    ))
+                                    .size(12.0)
+                                    .color(muted()),
+                                );
+                            });
+                        });
+                    });
+
+                ui.add_space(18.0);
+                ui.label(
+                    RichText::new("Crop")
+                        .size(18.0)
+                        .strong()
+                        .color(Color32::from_rgb(45, 45, 45)),
+                );
+                ui.add_space(6.0);
+
+                egui::Frame::new()
+                    .fill(surface())
+                    .stroke(Stroke::new(1.0, border()))
+                    .corner_radius(12)
+                    .inner_margin(egui::Margin::same(13))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("Padding")
+                                    .size(13.0)
+                                    .strong()
+                                    .color(Color32::from_rgb(45, 45, 45)),
+                            );
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(
+                                    RichText::new(format!("{} px", self.margin))
+                                        .size(12.0)
+                                        .color(muted()),
+                                );
+                            });
+                        });
+                        let margin_changed = ui
+                            .add(egui::Slider::new(&mut self.margin, 0..=100).show_value(false))
+                            .changed();
+                        if margin_changed && self.image.is_some() {
+                            self.status = "Crop padding changed — run detection again.".into();
+                        }
+
+                        if let Some(index) = self.selected {
+                            if let Some(rect) = self.boxes.get(index) {
+                                ui.add_space(8.0);
+                                ui.separator();
+                                ui.add_space(7.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(format!("Frame {}", index + 1))
+                                            .size(12.5)
+                                            .strong()
+                                            .color(Color32::from_rgb(45, 45, 45)),
+                                    );
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        ui.label(
+                                            RichText::new(format!("{} × {} px", rect.w, rect.h))
+                                                .size(12.0)
+                                                .color(muted()),
+                                        );
+                                    });
+                                });
+                            }
+                        }
+                    });
 
                 ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-                    ui.add_space(18.0);
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(
+                            "Wheel zooms · middle-drag pans · arrows nudge · Ctrl+Z/Y undo/redo",
+                        )
+                        .size(10.5)
+                        .color(muted()),
+                    );
+                    ui.add_space(8.0);
                     if action_button(
                         ui,
-                        "Export PNGs",
+                        if self.exporting { "Exporting…" } else { "Export PNGs" },
                         !self.boxes.is_empty()
                             && !self.loading
                             && !self.detecting
@@ -1149,24 +1308,22 @@ impl eframe::App for SlicerApp {
                     ) {
                         self.export(ctx);
                     }
-                    ui.add_space(8.0);
-                    ui.label(
-                        RichText::new("Wheel: zoom · middle-drag: pan · arrows: 1 px · Shift+arrows: 10 px · Ctrl+Z/Y: undo/redo.")
-                            .size(11.5)
-                            .color(muted()),
-                    );
                 });
             });
 
         egui::TopBottomPanel::bottom("status")
-            .exact_height(42.0)
+            .exact_height(34.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(panel_bg())
+                    .inner_margin(egui::Margin::symmetric(10, 0)),
+            )
             .show(ctx, |ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.add_space(12.0);
                     if self.loading || self.detecting || self.exporting {
-                        ui.add(egui::Spinner::new().size(16.0));
+                        ui.add(egui::Spinner::new().size(14.0));
                     }
-                    ui.label(RichText::new(&self.status).size(12.5).color(muted()));
+                    ui.label(RichText::new(&self.status).size(11.5).color(muted()));
                 });
             });
 
