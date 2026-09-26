@@ -1,6 +1,7 @@
 mod detection;
 mod editor;
 mod openai_detection;
+mod scanner;
 mod ui;
 
 fn main() -> gtk::glib::ExitCode {

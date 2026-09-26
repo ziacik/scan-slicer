@@ -18,6 +18,7 @@ pub(super) struct EditorSnapshot {
 pub(super) enum Busy {
     None,
     Loading,
+    Scanning,
     Detecting,
     Exporting,
 }
@@ -69,7 +70,7 @@ impl Default for AppState {
             redo_stack: Vec::new(),
             margin: 0,
             busy: Busy::None,
-            status: "Open a scan to begin.".into(),
+            status: "Open an image or scan one to begin.".into(),
         }
     }
 }

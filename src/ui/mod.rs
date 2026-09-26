@@ -16,11 +16,13 @@ struct Ui {
     window: adw::ApplicationWindow,
     drawing: gtk::DrawingArea,
     empty_page: adw::StatusPage,
+    empty_scan_button: gtk::Button,
     empty_open_button: gtk::Button,
     source_row: adw::ActionRow,
     frames_row: adw::ActionRow,
     selected_row: adw::ActionRow,
     padding_spin: gtk::SpinButton,
+    scan_button: gtk::Button,
     open_button: gtk::Button,
     detect_button: gtk::Button,
     export_button: gtk::Button,
@@ -60,6 +62,7 @@ fn build_ui(app: &adw::Application) {
     let title = adw::WindowTitle::new("Scan Slicer", "Photo sheet editor");
     header.set_title_widget(Some(&title));
 
+    let scan_button = labeled_icon_button("scanner-symbolic", "Scan", "Scan from a scanner");
     let open_button = labeled_icon_button("document-open-symbolic", "Open", "Open scan");
     let detect_button = labeled_icon_button(
         "system-search-symbolic",
@@ -72,6 +75,7 @@ fn build_ui(app: &adw::Application) {
     let export_button = gtk::Button::with_label("Export");
     export_button.add_css_class("suggested-action");
 
+    header.pack_start(&scan_button);
     header.pack_start(&open_button);
     header.pack_start(&detect_button);
     header.pack_end(&export_button);
@@ -159,17 +163,23 @@ fn build_ui(app: &adw::Application) {
     drawing.add_css_class("scan-canvas");
 
     let empty_page = adw::StatusPage::builder()
-        .icon_name("image-x-generic-symbolic")
-        .title("Open a scan to begin")
-        .description("PNG, JPEG or TIFF")
+        .icon_name("scanner-symbolic")
+        .title("Open or scan an image")
+        .description("Open PNG, JPEG or TIFF, or scan directly from a SANE-compatible scanner")
         .build();
     empty_page.set_can_target(true);
     empty_page.add_css_class("canvas-empty-page");
 
-    let empty_open_button = gtk::Button::with_label("Open Scan…");
-    empty_open_button.add_css_class("suggested-action");
-    empty_open_button.set_halign(gtk::Align::Center);
-    empty_page.set_child(Some(&empty_open_button));
+    let empty_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    empty_actions.set_halign(gtk::Align::Center);
+
+    let empty_scan_button = gtk::Button::with_label("Scan from Scanner…");
+    empty_scan_button.add_css_class("suggested-action");
+    let empty_open_button = gtk::Button::with_label("Open Image…");
+
+    empty_actions.append(&empty_scan_button);
+    empty_actions.append(&empty_open_button);
+    empty_page.set_child(Some(&empty_actions));
 
     let canvas_overlay = gtk::Overlay::new();
     canvas_overlay.set_child(Some(&drawing));
@@ -199,11 +209,13 @@ fn build_ui(app: &adw::Application) {
         window,
         drawing,
         empty_page,
+        empty_scan_button,
         empty_open_button,
         source_row,
         frames_row,
         selected_row,
         padding_spin,
+        scan_button,
         open_button,
         detect_button,
         export_button,

@@ -12,7 +12,11 @@ use gdk_pixbuf::{Colorspace, Pixbuf};
 use gtk::glib;
 use image::DynamicImage;
 
-use crate::{detection::detect_photos, editor};
+use crate::{
+    detection::detect_photos,
+    editor,
+    scanner::{self, ScannerDevice},
+};
 
 use super::{
     state::{AppState, Busy},
@@ -26,6 +30,24 @@ pub(super) fn connect_actions(state: &Rc<RefCell<AppState>>, ui: &Ui) {
         let button = ui.empty_open_button.clone();
         button.connect_clicked(move |_| {
             choose_and_load(state.clone(), ui.clone());
+        });
+    }
+
+    {
+        let state = state.clone();
+        let ui = ui.clone();
+        let button = ui.empty_scan_button.clone();
+        button.connect_clicked(move |_| {
+            start_scan(state.clone(), ui.clone());
+        });
+    }
+
+    {
+        let state = state.clone();
+        let ui = ui.clone();
+        let button = ui.scan_button.clone();
+        button.connect_clicked(move |_| {
+            start_scan(state.clone(), ui.clone());
         });
     }
 
@@ -131,6 +153,232 @@ pub(super) fn connect_actions(state: &Rc<RefCell<AppState>>, ui: &Ui) {
         });
     }
 }
+
+fn start_scan(state: Rc<RefCell<AppState>>, ui: Ui) {
+    if state.borrow().busy != Busy::None {
+        return;
+    }
+
+    {
+        let mut st = state.borrow_mut();
+        st.busy = Busy::Scanning;
+        st.status = "Looking for scanners…".into();
+    }
+    refresh_ui(&state.borrow(), &ui);
+
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(scanner::list_devices());
+    });
+
+    glib::timeout_add_local(Duration::from_millis(50), move || match rx.try_recv() {
+        Ok(result) => {
+            match result {
+                Ok(devices) => {
+                    {
+                        let mut st = state.borrow_mut();
+                        st.busy = Busy::None;
+                        st.status = if devices.is_empty() {
+                            "No SANE scanners found.".into()
+                        } else {
+                            format!(
+                                "Found {} scanner{}.",
+                                devices.len(),
+                                if devices.len() == 1 { "" } else { "s" }
+                            )
+                        };
+                    }
+                    refresh_ui(&state.borrow(), &ui);
+
+                    if devices.is_empty() {
+                        ui.toast_overlay
+                            .add_toast(adw::Toast::new("No scanners found"));
+                    } else {
+                        show_scan_dialog(state.clone(), ui.clone(), devices);
+                    }
+                }
+                Err(error) => {
+                    {
+                        let mut st = state.borrow_mut();
+                        st.busy = Busy::None;
+                        st.status = error;
+                    }
+                    refresh_ui(&state.borrow(), &ui);
+                    ui.toast_overlay
+                        .add_toast(adw::Toast::new("Could not access SANE"));
+                }
+            }
+            glib::ControlFlow::Break
+        }
+        Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+        Err(mpsc::TryRecvError::Disconnected) => {
+            {
+                let mut st = state.borrow_mut();
+                st.busy = Busy::None;
+                st.status = "Scanner discovery failed.".into();
+            }
+            refresh_ui(&state.borrow(), &ui);
+            glib::ControlFlow::Break
+        }
+    });
+}
+
+fn show_scan_dialog(state: Rc<RefCell<AppState>>, ui: Ui, devices: Vec<ScannerDevice>) {
+    let dialog = gtk::Dialog::builder()
+        .title("Scan from Scanner")
+        .transient_for(&ui.window)
+        .modal(true)
+        .resizable(false)
+        .build();
+
+    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    dialog.add_button("Scan", gtk::ResponseType::Accept);
+    dialog.set_default_response(gtk::ResponseType::Accept);
+
+    let content = dialog.content_area();
+    content.set_spacing(12);
+    content.set_margin_top(18);
+    content.set_margin_bottom(18);
+    content.set_margin_start(18);
+    content.set_margin_end(18);
+
+    let grid = gtk::Grid::builder()
+        .column_spacing(12)
+        .row_spacing(12)
+        .build();
+
+    let device_label = gtk::Label::new(Some("Scanner"));
+    device_label.set_halign(gtk::Align::Start);
+    let device_combo = gtk::ComboBoxText::new();
+    device_combo.set_hexpand(true);
+    for device in &devices {
+        device_combo.append_text(&device.label);
+    }
+    device_combo.set_active(Some(0));
+
+    let resolution_label = gtk::Label::new(Some("Resolution"));
+    resolution_label.set_halign(gtk::Align::Start);
+    let resolution_combo = gtk::ComboBoxText::new();
+    resolution_combo.append_text("300 DPI");
+    resolution_combo.append_text("600 DPI");
+    resolution_combo.append_text("1200 DPI");
+    resolution_combo.set_active(Some(1));
+
+    grid.attach(&device_label, 0, 0, 1, 1);
+    grid.attach(&device_combo, 1, 0, 1, 1);
+    grid.attach(&resolution_label, 0, 1, 1, 1);
+    grid.attach(&resolution_combo, 1, 1, 1, 1);
+
+    let hint = gtk::Label::new(Some(
+        "The scan is acquired through the system SANE backend and then detected automatically.",
+    ));
+    hint.set_wrap(true);
+    hint.set_xalign(0.0);
+    hint.add_css_class("dim-label");
+
+    content.append(&grid);
+    content.append(&hint);
+
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept {
+            let device_index = device_combo.active().unwrap_or(0) as usize;
+            let resolution = match resolution_combo.active().unwrap_or(1) {
+                0 => 300,
+                2 => 1200,
+                _ => 600,
+            };
+
+            if let Some(device) = devices.get(device_index).cloned() {
+                dialog.close();
+                perform_scan(state.clone(), ui.clone(), device, resolution);
+                return;
+            }
+        }
+
+        dialog.close();
+    });
+
+    dialog.present();
+}
+
+fn perform_scan(
+    state: Rc<RefCell<AppState>>,
+    ui: Ui,
+    device: ScannerDevice,
+    resolution: u32,
+) {
+    if state.borrow().busy != Busy::None {
+        return;
+    }
+
+    {
+        let mut st = state.borrow_mut();
+        st.busy = Busy::Scanning;
+        st.status = format!("Scanning at {resolution} DPI…");
+    }
+    refresh_ui(&state.borrow(), &ui);
+
+    let device_id = device.id.clone();
+    let device_label = device.label.clone();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(scanner::scan(&device_id, resolution));
+    });
+
+    glib::timeout_add_local(Duration::from_millis(80), move || match rx.try_recv() {
+        Ok(result) => {
+            match result {
+                Ok(image) => {
+                    let preview = make_preview(&image);
+                    let image = Arc::new(image);
+                    {
+                        let mut st = state.borrow_mut();
+                        st.image = Some(image);
+                        st.preview = Some(preview);
+                        st.image_path = None;
+                        st.boxes.clear();
+                        st.selected = None;
+                        st.selected_mode = None;
+                        st.drag = None;
+                        st.zoom = 1.0;
+                        st.pan = (0.0, 0.0);
+                        st.undo_stack.clear();
+                        st.redo_stack.clear();
+                        st.busy = Busy::None;
+                        st.status =
+                            format!("Scanned from {device_label} at {resolution} DPI.");
+                    }
+
+                    refresh_ui(&state.borrow(), &ui);
+                    ui.drawing.queue_draw();
+                    ui.toast_overlay.add_toast(adw::Toast::new("Scan complete"));
+                    start_detection(state.clone(), ui.clone());
+                }
+                Err(error) => {
+                    {
+                        let mut st = state.borrow_mut();
+                        st.busy = Busy::None;
+                        st.status = format!("Scan failed: {error}");
+                    }
+                    refresh_ui(&state.borrow(), &ui);
+                    ui.toast_overlay.add_toast(adw::Toast::new("Scan failed"));
+                }
+            }
+            glib::ControlFlow::Break
+        }
+        Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+        Err(mpsc::TryRecvError::Disconnected) => {
+            {
+                let mut st = state.borrow_mut();
+                st.busy = Busy::None;
+                st.status = "Scan failed.".into();
+            }
+            refresh_ui(&state.borrow(), &ui);
+            glib::ControlFlow::Break
+        }
+    });
+}
+
 fn choose_and_load(state: Rc<RefCell<AppState>>, ui: Ui) {
     if state.borrow().busy != Busy::None {
         return;
@@ -448,17 +696,22 @@ fn make_preview(image: &DynamicImage) -> Pixbuf {
 }
 
 pub(super) fn refresh_ui(state: &AppState, ui: &Ui) {
-    if let (Some(path), Some(image)) = (state.image_path.as_ref(), state.image.as_ref()) {
-        ui.source_row.set_title(
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("Loaded scan"),
-        );
+    if let Some(image) = state.image.as_ref() {
+        if let Some(path) = state.image_path.as_ref() {
+            ui.source_row.set_title(
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("Loaded image"),
+            );
+        } else {
+            ui.source_row.set_title("Scanned image");
+        }
         ui.source_row
             .set_subtitle(&format!("{} × {} px", image.width(), image.height()));
     } else {
-        ui.source_row.set_title("No scan loaded");
-        ui.source_row.set_subtitle("PNG, JPEG or TIFF");
+        ui.source_row.set_title("No image loaded");
+        ui.source_row
+            .set_subtitle("PNG, JPEG, TIFF or SANE scanner");
     }
 
     ui.frames_row.set_subtitle(&format!(
@@ -489,6 +742,8 @@ pub(super) fn refresh_ui(state: &AppState, ui: &Ui) {
     }
 
     let idle = state.busy == Busy::None;
+    ui.scan_button.set_sensitive(idle);
+    ui.empty_scan_button.set_sensitive(idle);
     ui.open_button.set_sensitive(idle);
     ui.empty_open_button.set_sensitive(idle);
     ui.detect_button

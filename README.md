@@ -7,6 +7,7 @@ The app is intentionally conservative: automatic detection gives every detected 
 ## Current features
 
 - Open PNG, JPEG and TIFF scans
+- Scan directly from SANE-compatible scanners through the system `scanimage` frontend
 - Detect multiple photos against the scanner background
 - Configurable detection threshold and safety margin
 - Move detected frames with the mouse
@@ -21,11 +22,19 @@ The app is intentionally conservative: automatic detection gives every detected 
 cargo run --release
 ```
 
-On Linux, `eframe` may need the usual Wayland/X11 development packages supplied by your distribution.
+The app uses GTK4/libadwaita. Scanner acquisition uses the system SANE stack via `scanimage`.
+
+On Arch Linux, install scanner support with:
+
+```bash
+sudo pacman -S sane
+```
+
+Scanning is optional; opening existing PNG/JPEG/TIFF files works without SANE.
 
 ## Workflow
 
-1. Open the full scanner image.
+1. Open an existing scanner image, or click **Scan** to acquire one directly.
 2. Adjust **threshold** if detection misses a photo or picks up scanner noise.
 3. Adjust **margin px** to keep a little space around every photo.
 4. Click **Detect photos** after changing detection settings.
