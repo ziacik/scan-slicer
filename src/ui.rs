@@ -255,7 +255,7 @@ fn build_ui(app: &adw::Application) {
 
     let open_button = labeled_icon_button("document-open-symbolic", "Open", "Open scan");
     let detect_button = labeled_icon_button(
-        "object-select-symbolic",
+        "system-search-symbolic",
         "Detect Photos",
         "Detect photos in the scan",
     );
