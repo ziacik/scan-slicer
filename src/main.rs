@@ -11,7 +11,8 @@ use eframe::egui::{
     self, Align, Color32, ColorImage, CursorIcon, FontId, Layout, Pos2, Rect, RichText, Sense,
     Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2,
 };
-use image::DynamicImage;
+use image::{DynamicImage, Rgba, RgbaImage};
+use imageproc::geometric_transformations::{warp_into, Border, Interpolation, Projection};
 
 use crate::detection::{detect_photos, PhotoRect};
 
@@ -297,6 +298,7 @@ impl SlicerApp {
             .and_then(|s| s.to_str())
             .unwrap_or("scan");
 
+        let rgba = image.to_rgba8();
         let mut exported = 0usize;
         for (index, rect) in self.boxes.iter().enumerate() {
             let rect = rect.clamped(image.width(), image.height());
@@ -304,7 +306,18 @@ impl SlicerApp {
                 continue;
             }
 
-            let crop = image.crop_imm(rect.x, rect.y, rect.w, rect.h);
+            let crop = match rect.corners {
+                Some(corners) => match perspective_crop(&rgba, corners) {
+                    Ok(crop) => crop,
+                    Err(error) => {
+                        self.status =
+                            format!("Export failed for frame {}: {error}", index + 1);
+                        return;
+                    }
+                },
+                None => image::imageops::crop_imm(&rgba, rect.x, rect.y, rect.w, rect.h).to_image(),
+            };
+
             let path = dir.join(format!("{stem}_{:02}.png", index + 1));
             match crop.save(&path) {
                 Ok(()) => exported += 1,
@@ -539,12 +552,12 @@ impl SlicerApp {
 
     fn hit_test(&self, pointer: Pos2, canvas: Rect, scale: f32) -> Option<(usize, DragMode)> {
         for (index, rect) in self.boxes.iter().enumerate().rev() {
-            let screen = rect_to_screen(*rect, canvas, scale);
+            let points = rect_screen_corners(*rect, canvas, scale);
             let handles = [
-                (screen.left_top(), DragMode::TopLeft),
-                (screen.right_top(), DragMode::TopRight),
-                (screen.left_bottom(), DragMode::BottomLeft),
-                (screen.right_bottom(), DragMode::BottomRight),
+                (points[0], DragMode::TopLeft),
+                (points[1], DragMode::TopRight),
+                (points[2], DragMode::BottomRight),
+                (points[3], DragMode::BottomLeft),
             ];
 
             for (point, mode) in handles {
@@ -553,7 +566,7 @@ impl SlicerApp {
                 }
             }
 
-            if screen.contains(pointer) {
+            if point_in_quad(pointer, points) {
                 return Some((index, DragMode::Move));
             }
         }
@@ -794,46 +807,240 @@ fn apply_drag(
     image_w: u32,
     image_h: u32,
 ) {
-    let min_size = 20i32;
-    let mut left = rect.x as i32;
-    let mut top = rect.y as i32;
-    let mut right = (rect.x + rect.w) as i32;
-    let mut bottom = (rect.y + rect.h) as i32;
-    let dx = dx.round() as i32;
-    let dy = dy.round() as i32;
+    let mut corners = rect_image_corners(*rect);
 
     match mode {
         DragMode::Move => {
-            let width = right - left;
-            let height = bottom - top;
-            left = (left + dx).clamp(0, image_w as i32 - width);
-            top = (top + dy).clamp(0, image_h as i32 - height);
-            right = left + width;
-            bottom = top + height;
+            let min_x = corners.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
+            let min_y = corners.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
+            let max_x = corners
+                .iter()
+                .map(|p| p[0])
+                .fold(f32::NEG_INFINITY, f32::max);
+            let max_y = corners
+                .iter()
+                .map(|p| p[1])
+                .fold(f32::NEG_INFINITY, f32::max);
+
+            let dx = dx.clamp(-min_x, image_w as f32 - max_x);
+            let dy = dy.clamp(-min_y, image_h as f32 - max_y);
+            for point in &mut corners {
+                point[0] += dx;
+                point[1] += dy;
+            }
         }
-        DragMode::TopLeft => {
-            left = (left + dx).clamp(0, right - min_size);
-            top = (top + dy).clamp(0, bottom - min_size);
-        }
-        DragMode::TopRight => {
-            right = (right + dx).clamp(left + min_size, image_w as i32);
-            top = (top + dy).clamp(0, bottom - min_size);
-        }
-        DragMode::BottomLeft => {
-            left = (left + dx).clamp(0, right - min_size);
-            bottom = (bottom + dy).clamp(top + min_size, image_h as i32);
-        }
-        DragMode::BottomRight => {
-            right = (right + dx).clamp(left + min_size, image_w as i32);
-            bottom = (bottom + dy).clamp(top + min_size, image_h as i32);
+        mode => {
+            let index = match mode {
+                DragMode::TopLeft => 0,
+                DragMode::TopRight => 1,
+                DragMode::BottomRight => 2,
+                DragMode::BottomLeft => 3,
+                DragMode::Move => unreachable!(),
+            };
+            corners[index][0] = (corners[index][0] + dx).clamp(0.0, image_w as f32);
+            corners[index][1] = (corners[index][1] + dy).clamp(0.0, image_h as f32);
+
+            if !is_valid_quad(corners) {
+                return;
+            }
         }
     }
 
-    rect.x = left as u32;
-    rect.y = top as u32;
-    rect.w = (right - left) as u32;
-    rect.h = (bottom - top) as u32;
-    rect.corners = None;
+    set_rect_corners(rect, corners);
+}
+
+fn rect_image_corners(rect: PhotoRect) -> [[f32; 2]; 4] {
+    rect.corners.unwrap_or([
+        [rect.x as f32, rect.y as f32],
+        [(rect.x + rect.w) as f32, rect.y as f32],
+        [(rect.x + rect.w) as f32, (rect.y + rect.h) as f32],
+        [rect.x as f32, (rect.y + rect.h) as f32],
+    ])
+}
+
+fn set_rect_corners(rect: &mut PhotoRect, corners: [[f32; 2]; 4]) {
+    let min_x = corners.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
+    let min_y = corners.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
+    let max_x = corners
+        .iter()
+        .map(|p| p[0])
+        .fold(f32::NEG_INFINITY, f32::max);
+    let max_y = corners
+        .iter()
+        .map(|p| p[1])
+        .fold(f32::NEG_INFINITY, f32::max);
+
+    let left = min_x.floor().max(0.0) as u32;
+    let top = min_y.floor().max(0.0) as u32;
+    let right = max_x.ceil().max(left as f32) as u32;
+    let bottom = max_y.ceil().max(top as f32) as u32;
+
+    rect.x = left;
+    rect.y = top;
+    rect.w = right.saturating_sub(left);
+    rect.h = bottom.saturating_sub(top);
+    rect.corners = Some(corners);
+}
+
+fn is_valid_quad(points: [[f32; 2]; 4]) -> bool {
+    const MIN_EDGE: f32 = 20.0;
+
+    for i in 0..4 {
+        let a = points[i];
+        let b = points[(i + 1) % 4];
+        if point_distance(a, b) < MIN_EDGE {
+            return false;
+        }
+    }
+
+    let mut sign = 0.0f32;
+    for i in 0..4 {
+        let a = points[i];
+        let b = points[(i + 1) % 4];
+        let c = points[(i + 2) % 4];
+        let cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+        if cross.abs() < 1.0 {
+            return false;
+        }
+        if sign == 0.0 {
+            sign = cross.signum();
+        } else if sign * cross < 0.0 {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn point_in_quad(point: Pos2, points: [Pos2; 4]) -> bool {
+    let mut has_positive = false;
+    let mut has_negative = false;
+
+    for i in 0..4 {
+        let a = points[i];
+        let b = points[(i + 1) % 4];
+        let cross = (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x);
+        has_positive |= cross > 0.0;
+        has_negative |= cross < 0.0;
+        if has_positive && has_negative {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn point_distance(a: [f32; 2], b: [f32; 2]) -> f32 {
+    (a[0] - b[0]).hypot(a[1] - b[1])
+}
+
+fn perspective_crop(
+    image: &RgbaImage,
+    corners: [[f32; 2]; 4],
+) -> Result<RgbaImage, String> {
+    if !is_valid_quad(corners) {
+        return Err("the crop corners do not form a valid quadrilateral".into());
+    }
+
+    let width = point_distance(corners[0], corners[1])
+        .max(point_distance(corners[3], corners[2]))
+        .round()
+        .max(2.0) as u32;
+    let height = point_distance(corners[0], corners[3])
+        .max(point_distance(corners[1], corners[2]))
+        .round()
+        .max(2.0) as u32;
+
+    let from = corners.map(|[x, y]| (x, y));
+    let to = [
+        (0.0, 0.0),
+        ((width - 1) as f32, 0.0),
+        ((width - 1) as f32, (height - 1) as f32),
+        (0.0, (height - 1) as f32),
+    ];
+    let projection = Projection::from_control_points(from, to)
+        .ok_or_else(|| "could not calculate perspective transform".to_string())?;
+
+    let mut output = RgbaImage::new(width, height);
+    warp_into(
+        image,
+        projection,
+        Interpolation::Bicubic,
+        Border::Constant(Rgba([0, 0, 0, 0])),
+        &mut output,
+    );
+    Ok(output)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dragging_one_corner_keeps_the_quadrilateral() {
+        let mut rect = PhotoRect {
+            x: 10,
+            y: 10,
+            w: 100,
+            h: 90,
+            corners: Some([
+                [10.0, 20.0],
+                [100.0, 10.0],
+                [110.0, 90.0],
+                [20.0, 100.0],
+            ]),
+        };
+
+        apply_drag(&mut rect, DragMode::TopLeft, 8.0, -5.0, 200, 200);
+
+        let corners = rect.corners.expect("quad must be preserved");
+        assert_eq!(corners[0], [18.0, 15.0]);
+        assert_eq!(corners[1], [100.0, 10.0]);
+        assert_eq!(corners[2], [110.0, 90.0]);
+        assert_eq!(corners[3], [20.0, 100.0]);
+    }
+
+    #[test]
+    fn moving_a_quad_preserves_its_shape() {
+        let mut rect = PhotoRect {
+            x: 10,
+            y: 10,
+            w: 100,
+            h: 90,
+            corners: Some([
+                [10.0, 20.0],
+                [100.0, 10.0],
+                [110.0, 90.0],
+                [20.0, 100.0],
+            ]),
+        };
+
+        apply_drag(&mut rect, DragMode::Move, 15.0, 12.0, 200, 200);
+
+        assert_eq!(
+            rect.corners.unwrap(),
+            [
+                [25.0, 32.0],
+                [115.0, 22.0],
+                [125.0, 102.0],
+                [35.0, 112.0],
+            ]
+        );
+    }
+
+    #[test]
+    fn hit_area_follows_rotated_quad_instead_of_bbox() {
+        let quad = [
+            Pos2::new(50.0, 10.0),
+            Pos2::new(90.0, 50.0),
+            Pos2::new(50.0, 90.0),
+            Pos2::new(10.0, 50.0),
+        ];
+
+        assert!(point_in_quad(Pos2::new(50.0, 50.0), quad));
+        assert!(!point_in_quad(Pos2::new(15.0, 15.0), quad));
+    }
 }
 
 fn main() -> eframe::Result {
