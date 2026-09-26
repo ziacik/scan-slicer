@@ -67,15 +67,11 @@ pub struct DetectionOutput {
 
 pub fn detect_photos(image: &DynamicImage, threshold: u8, margin: u32) -> DetectionOutput {
     match crate::openai_detection::detect_photos_openai(image, margin) {
-        Ok(ai_boxes) if !ai_boxes.is_empty() => {
-            let classic = detect_photos_cv(image, threshold, margin).unwrap_or_default();
-            let boxes = refine_ai_with_classic(ai_boxes, &classic);
-            DetectionOutput {
-                boxes,
-                engine: "OpenAI vision",
-                warning: None,
-            }
-        }
+        Ok(ai_boxes) if !ai_boxes.is_empty() => DetectionOutput {
+            boxes: ai_boxes,
+            engine: "OpenAI vision",
+            warning: None,
+        },
         Ok(_) => {
             let boxes = detect_photos_cv(image, threshold, margin).unwrap_or_default();
             DetectionOutput {
@@ -93,51 +89,6 @@ pub fn detect_photos(image: &DynamicImage, threshold: u8, margin: u32) -> Detect
             }
         }
     }
-}
-
-fn refine_ai_with_classic(
-    ai_boxes: Vec<PhotoRect>,
-    classic_boxes: &[PhotoRect],
-) -> Vec<PhotoRect> {
-    let mut result = Vec::with_capacity(ai_boxes.len());
-
-    for ai in ai_boxes {
-        let ai_area = (ai.w * ai.h).max(1) as f32;
-        let best = classic_boxes
-            .iter()
-            .copied()
-            .filter_map(|classic| {
-                let classic_area = (classic.w * classic.h).max(1) as f32;
-                let area_ratio = classic_area / ai_area;
-                if !(0.70..=1.40).contains(&area_ratio) {
-                    return None;
-                }
-
-                let iou = bbox_iou(ai, classic);
-                (iou >= 0.72).then_some((iou, classic))
-            })
-            .max_by(|a, b| a.0.total_cmp(&b.0));
-
-        result.push(best.map(|(_, rect)| rect).unwrap_or(ai));
-    }
-
-    result.sort_by_key(|r| (r.y / 40, r.x));
-    result
-}
-
-fn bbox_iou(a: PhotoRect, b: PhotoRect) -> f32 {
-    let left = a.x.max(b.x);
-    let top = a.y.max(b.y);
-    let right = (a.x + a.w).min(b.x + b.w);
-    let bottom = (a.y + a.h).min(b.y + b.h);
-    if right <= left || bottom <= top {
-        return 0.0;
-    }
-
-    let intersection = (right - left) as f32 * (bottom - top) as f32;
-    let area_a = (a.w * a.h) as f32;
-    let area_b = (b.w * b.h) as f32;
-    intersection / (area_a + area_b - intersection).max(1.0)
 }
 
 fn detect_photos_cv(
