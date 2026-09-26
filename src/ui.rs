@@ -185,6 +185,8 @@ impl AppState {
         let Some(image) = self.image.as_ref() else {
             return;
         };
+        let image_w = image.width();
+        let image_h = image.height();
         if index >= self.boxes.len() {
             return;
         }
@@ -196,8 +198,8 @@ impl AppState {
             DragMode::Move,
             dx,
             dy,
-            image.width(),
-            image.height(),
+            image_w,
+            image_h,
         );
         self.boxes[index] = rect;
         self.status = "Moved frame.".into();
@@ -504,10 +506,11 @@ fn connect_actions(state: &Rc<RefCell<AppState>>, ui: &Ui) {
         let state = state.clone();
         let ui = ui.clone();
         ui.fit_button.connect_clicked(move |_| {
-            let mut state = state.borrow_mut();
-            state.zoom = 1.0;
-            state.pan = (0.0, 0.0);
-            drop(state);
+            {
+                let mut st = state.borrow_mut();
+                st.zoom = 1.0;
+                st.pan = (0.0, 0.0);
+            }
             refresh_ui(&state.borrow(), &ui);
             ui.drawing.queue_draw();
         });
@@ -517,12 +520,13 @@ fn connect_actions(state: &Rc<RefCell<AppState>>, ui: &Ui) {
         let state = state.clone();
         let ui = ui.clone();
         ui.padding_spin.connect_value_changed(move |spin| {
-            let mut state = state.borrow_mut();
-            state.margin = spin.value_as_int().max(0) as u32;
-            if state.image.is_some() {
-                state.status = "Padding changed — run detection again.".into();
+            {
+                let mut st = state.borrow_mut();
+                st.margin = spin.value_as_int().max(0) as u32;
+                if st.image.is_some() {
+                    st.status = "Padding changed — run detection again.".into();
+                }
             }
-            drop(state);
             refresh_ui(&state.borrow(), &ui);
         });
     }
@@ -583,32 +587,33 @@ fn connect_canvas(state: &Rc<RefCell<AppState>>, ui: &Ui) {
             let ui = ui.clone();
             gesture.connect_drag_begin(move |gesture, x, y| {
                 ui.drawing.grab_focus();
-                let mut state = state.borrow_mut();
-                let Some(transform) =
-                    view_transform(&state, ui.drawing.width(), ui.drawing.height())
-                else {
-                    return;
-                };
+                {
+                    let mut st = state.borrow_mut();
+                    let Some(transform) =
+                        view_transform(&st, ui.drawing.width(), ui.drawing.height())
+                    else {
+                        return;
+                    };
 
-                if let Some((index, mode)) = hit_test(&state, [x, y], transform) {
-                    state.push_undo();
-                    let start_rect = state.boxes[index];
-                    state.selected = Some(index);
-                    state.selected_mode = Some(mode);
-                    state.drag = Some(ActiveDrag {
+                    if let Some((index, mode)) = hit_test(&st, [x, y], transform) {
+                        st.push_undo();
+                        let start_rect = st.boxes[index];
+                        st.selected = Some(index);
+                        st.selected_mode = Some(mode);
+                        st.drag = Some(ActiveDrag {
                         index,
                         mode,
                         start_rect,
                         start_pointer: [x, y],
                         pointer: [x, y],
                     });
-                    gesture.set_state(gtk::EventSequenceState::Claimed);
-                } else {
-                    state.selected = None;
-                    state.selected_mode = None;
+                        gesture.set_state(gtk::EventSequenceState::Claimed);
+                    } else {
+                        st.selected = None;
+                        st.selected_mode = None;
+                    }
                 }
 
-                drop(state);
                 refresh_ui(&state.borrow(), &ui);
                 ui.drawing.queue_draw();
             });
@@ -618,15 +623,15 @@ fn connect_canvas(state: &Rc<RefCell<AppState>>, ui: &Ui) {
             let state = state.clone();
             let ui = ui.clone();
             gesture.connect_drag_update(move |_, dx, dy| {
-                let mut state = state.borrow_mut();
-                let Some(active) = state.drag else {
+                let mut st = state.borrow_mut();
+                let Some(active) = st.drag else {
                     return;
                 };
-                let Some(image) = state.image.as_ref().cloned() else {
+                let Some(image) = st.image.as_ref().cloned() else {
                     return;
                 };
                 let Some(transform) =
-                    view_transform(&state, ui.drawing.width(), ui.drawing.height())
+                    view_transform(&st, ui.drawing.width(), ui.drawing.height())
                 else {
                     return;
                 };
@@ -640,10 +645,10 @@ fn connect_canvas(state: &Rc<RefCell<AppState>>, ui: &Ui) {
                     image.width(),
                     image.height(),
                 );
-                if active.index < state.boxes.len() {
-                    state.boxes[active.index] = rect;
+                if active.index < st.boxes.len() {
+                    st.boxes[active.index] = rect;
                 }
-                state.drag = Some(ActiveDrag {
+                st.drag = Some(ActiveDrag {
                     pointer: [
                         active.start_pointer[0] + dx,
                         active.start_pointer[1] + dy,
@@ -651,7 +656,7 @@ fn connect_canvas(state: &Rc<RefCell<AppState>>, ui: &Ui) {
                     ..active
                 });
 
-                drop(state);
+                drop(st);
                 refresh_ui(&state.borrow(), &ui);
                 ui.drawing.queue_draw();
             });
@@ -661,11 +666,12 @@ fn connect_canvas(state: &Rc<RefCell<AppState>>, ui: &Ui) {
             let state = state.clone();
             let ui = ui.clone();
             gesture.connect_drag_end(move |_, _, _| {
-                let mut state = state.borrow_mut();
-                state.drag = None;
-                state.selected_mode = None;
-                state.status = "Frame adjusted.".into();
-                drop(state);
+                {
+                    let mut st = state.borrow_mut();
+                    st.drag = None;
+                    st.selected_mode = None;
+                    st.status = "Frame adjusted.".into();
+                }
                 refresh_ui(&state.borrow(), &ui);
                 ui.drawing.queue_draw();
             });
@@ -693,11 +699,12 @@ fn connect_canvas(state: &Rc<RefCell<AppState>>, ui: &Ui) {
             let drawing = ui.drawing.clone();
             let ui = ui.clone();
             pan.connect_drag_update(move |_, dx, dy| {
-                let mut state = state.borrow_mut();
-                if let Some((start_x, start_y)) = state.pan_drag_start {
-                    state.pan = (start_x + dx as f32, start_y + dy as f32);
+                {
+                    let mut st = state.borrow_mut();
+                    if let Some((start_x, start_y)) = st.pan_drag_start {
+                        st.pan = (start_x + dx as f32, start_y + dy as f32);
+                    }
                 }
-                drop(state);
                 refresh_ui(&state.borrow(), &ui);
                 drawing.queue_draw();
             });
@@ -718,33 +725,33 @@ fn connect_canvas(state: &Rc<RefCell<AppState>>, ui: &Ui) {
         let ui = ui.clone();
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
         scroll.connect_scroll(move |_, _, dy| {
-            let mut state = state.borrow_mut();
-            if state.image.is_none() {
+            let mut st = state.borrow_mut();
+            if st.image.is_none() {
                 return glib::Propagation::Proceed;
             }
 
-            let Some(before) = view_transform(&state, ui.drawing.width(), ui.drawing.height()) else {
+            let Some(before) = view_transform(&st, ui.drawing.width(), ui.drawing.height()) else {
                 return glib::Propagation::Proceed;
             };
-            let pointer = state.hover;
+            let pointer = st.hover;
             let image_point = [
                 (pointer[0] - before.x) / before.scale,
                 (pointer[1] - before.y) / before.scale,
             ];
 
             let factor = (-dy * 0.14).exp() as f32;
-            state.zoom = (state.zoom * factor).clamp(1.0, 8.0);
+            st.zoom = (st.zoom * factor).clamp(1.0, 8.0);
 
-            if let Some(after) = view_transform(&state, ui.drawing.width(), ui.drawing.height()) {
+            if let Some(after) = view_transform(&st, ui.drawing.width(), ui.drawing.height()) {
                 let screen_after = [
                     after.x + image_point[0] * after.scale,
                     after.y + image_point[1] * after.scale,
                 ];
-                state.pan.0 += (pointer[0] - screen_after[0]) as f32;
-                state.pan.1 += (pointer[1] - screen_after[1]) as f32;
+                st.pan.0 += (pointer[0] - screen_after[0]) as f32;
+                st.pan.1 += (pointer[1] - screen_after[1]) as f32;
             }
 
-            drop(state);
+            drop(st);
             refresh_ui(&state.borrow(), &ui);
             ui.drawing.queue_draw();
             glib::Propagation::Stop
@@ -856,10 +863,11 @@ fn choose_and_load(state: Rc<RefCell<AppState>>, ui: Ui) {
                     start_detection(state.clone(), ui.clone());
                 }
                 Err(error) => {
-                    let mut state = state.borrow_mut();
-                    state.busy = Busy::None;
-                    state.status = format!("Could not open image: {error}");
-                    drop(state);
+                    {
+                        let mut st = state.borrow_mut();
+                        st.busy = Busy::None;
+                        st.status = format!("Could not open image: {error}");
+                    }
                     refresh_ui(&state.borrow(), &ui);
                     ui.toast_overlay
                         .add_toast(adw::Toast::new("Could not open the image"));
@@ -869,10 +877,11 @@ fn choose_and_load(state: Rc<RefCell<AppState>>, ui: Ui) {
         }
         Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
         Err(mpsc::TryRecvError::Disconnected) => {
-            let mut state = state.borrow_mut();
-            state.busy = Busy::None;
-            state.status = "Image loading failed.".into();
-            drop(state);
+            {
+                let mut st = state.borrow_mut();
+                st.busy = Busy::None;
+                st.status = "Image loading failed.".into();
+            }
             refresh_ui(&state.borrow(), &ui);
             glib::ControlFlow::Break
         }
@@ -936,10 +945,11 @@ fn start_detection(state: Rc<RefCell<AppState>>, ui: Ui) {
         }
         Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
         Err(mpsc::TryRecvError::Disconnected) => {
-            let mut state = state.borrow_mut();
-            state.busy = Busy::None;
-            state.status = "Photo detection failed.".into();
-            drop(state);
+            {
+                let mut st = state.borrow_mut();
+                st.busy = Busy::None;
+                st.status = "Photo detection failed.".into();
+            }
             refresh_ui(&state.borrow(), &ui);
             glib::ControlFlow::Break
         }
