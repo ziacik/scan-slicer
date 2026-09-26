@@ -9,7 +9,7 @@ use crate::{
 };
 
 #[derive(Clone)]
-struct EditorSnapshot {
+pub(super) struct EditorSnapshot {
     pub(super) boxes: Vec<PhotoRect>,
     pub(super) selected: Option<usize>,
 }
@@ -22,12 +22,6 @@ pub(super) enum Busy {
     Exporting,
 }
 
-#[derive(Clone, Copy)]
-struct ViewTransform {
-    x: f64,
-    y: f64,
-    scale: f64,
-}
 
 #[derive(Clone, Copy)]
 pub(super) struct ActiveDrag {
