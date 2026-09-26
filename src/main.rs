@@ -87,6 +87,13 @@ struct ActiveDrag {
     start_rect: PhotoRect,
 }
 
+#[derive(Clone)]
+struct EditorSnapshot {
+    boxes: Vec<PhotoRect>,
+    selected: Option<usize>,
+    selected_mode: Option<DragMode>,
+}
+
 struct DetectionJob {
     id: u64,
     image: Arc<DynamicImage>,
@@ -124,7 +131,12 @@ struct SlicerApp {
     image_path: Option<PathBuf>,
     boxes: Vec<PhotoRect>,
     selected: Option<usize>,
+    selected_mode: Option<DragMode>,
     drag: Option<ActiveDrag>,
+    zoom: f32,
+    pan: Vec2,
+    undo_stack: Vec<EditorSnapshot>,
+    redo_stack: Vec<EditorSnapshot>,
     margin: u32,
     status: String,
     detection_tx: Sender<DetectionJob>,
@@ -185,7 +197,12 @@ impl SlicerApp {
             image_path: None,
             boxes: Vec::new(),
             selected: None,
+            selected_mode: None,
             drag: None,
+            zoom: 1.0,
+            pan: Vec2::ZERO,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             margin: 0,
             status: "Open a scan to begin.".into(),
             detection_tx: job_tx,
@@ -241,7 +258,12 @@ impl SlicerApp {
                 self.image_path = Some(loaded.path.clone());
                 self.boxes.clear();
                 self.selected = None;
+                self.selected_mode = None;
                 self.drag = None;
+                self.zoom = 1.0;
+                self.pan = Vec2::ZERO;
+                self.undo_stack.clear();
+                self.redo_stack.clear();
                 self.status = format!("Loaded {}", loaded.path.display());
                 self.redetect();
             }
@@ -281,6 +303,9 @@ impl SlicerApp {
 
             self.boxes = result.boxes;
             self.selected = None;
+            self.selected_mode = None;
+            self.undo_stack.clear();
+            self.redo_stack.clear();
             self.detecting = false;
             self.status = match result.warning {
                 Some(warning) => format!(
@@ -423,10 +448,116 @@ impl SlicerApp {
         }
     }
 
+    fn snapshot(&self) -> EditorSnapshot {
+        EditorSnapshot {
+            boxes: self.boxes.clone(),
+            selected: self.selected,
+            selected_mode: self.selected_mode,
+        }
+    }
+
+    fn restore_snapshot(&mut self, snapshot: EditorSnapshot) {
+        self.boxes = snapshot.boxes;
+        self.selected = snapshot.selected.filter(|&index| index < self.boxes.len());
+        self.selected_mode = if self.selected.is_some() {
+            snapshot.selected_mode
+        } else {
+            None
+        };
+        self.drag = None;
+    }
+
+    fn push_undo(&mut self) {
+        const HISTORY_LIMIT: usize = 100;
+        if self.undo_stack.len() >= HISTORY_LIMIT {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack.push(self.snapshot());
+        self.redo_stack.clear();
+    }
+
+    fn undo(&mut self) {
+        let Some(snapshot) = self.undo_stack.pop() else {
+            return;
+        };
+        let current = self.snapshot();
+        self.redo_stack.push(current);
+        self.restore_snapshot(snapshot);
+        self.status = "Undid edit.".into();
+    }
+
+    fn redo(&mut self) {
+        let Some(snapshot) = self.redo_stack.pop() else {
+            return;
+        };
+        let current = self.snapshot();
+        self.undo_stack.push(current);
+        self.restore_snapshot(snapshot);
+        self.status = "Redid edit.".into();
+    }
+
+    fn nudge_selected(&mut self, dx: f32, dy: f32) {
+        let (Some(index), Some(image)) = (self.selected, self.image.as_ref()) else {
+            return;
+        };
+        if index >= self.boxes.len() {
+            return;
+        }
+
+        let mode = self.selected_mode.unwrap_or(DragMode::Move);
+        self.push_undo();
+        let mut rect = self.boxes[index];
+        apply_drag(&mut rect, mode, dx, dy, image.width(), image.height());
+        self.boxes[index] = rect;
+    }
+
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        if self.exporting || self.loading || self.detecting || self.drag.is_some() {
+            return;
+        }
+
+        let (undo, redo, nudge) = ctx.input(|i| {
+            let command = i.modifiers.command || i.modifiers.ctrl;
+            let redo = command
+                && ((i.modifiers.shift && i.key_pressed(egui::Key::Z))
+                    || i.key_pressed(egui::Key::Y));
+            let undo = command && !i.modifiers.shift && i.key_pressed(egui::Key::Z);
+
+            let step = if i.modifiers.shift { 10.0 } else { 1.0 };
+            let nudge = if !command && !i.modifiers.alt {
+                if i.key_pressed(egui::Key::ArrowLeft) {
+                    Some((-step, 0.0))
+                } else if i.key_pressed(egui::Key::ArrowRight) {
+                    Some((step, 0.0))
+                } else if i.key_pressed(egui::Key::ArrowUp) {
+                    Some((0.0, -step))
+                } else if i.key_pressed(egui::Key::ArrowDown) {
+                    Some((0.0, step))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            (undo, redo, nudge)
+        });
+
+        if redo {
+            self.redo();
+        } else if undo {
+            self.undo();
+        } else if let Some((dx, dy)) = nudge {
+            self.nudge_selected(dx, dy);
+        }
+    }
+
     fn add_box(&mut self) {
         let Some(image) = self.image.as_ref() else {
             return;
         };
+
+        self.push_undo();
 
         let w = (image.width() / 3).max(100);
         let h = (image.height() / 3).max(100);
@@ -439,12 +570,16 @@ impl SlicerApp {
         };
         self.boxes.push(rect);
         self.selected = Some(self.boxes.len() - 1);
+        self.selected_mode = Some(DragMode::Move);
     }
 
     fn remove_selected(&mut self) {
-        if let Some(index) = self.selected.take() {
+        if let Some(index) = self.selected {
             if index < self.boxes.len() {
+                self.push_undo();
                 self.boxes.remove(index);
+                self.selected = None;
+                self.selected_mode = None;
             }
         }
     }
@@ -492,12 +627,54 @@ impl SlicerApp {
             (workspace_rect.width() - 64.0).max(1.0),
             (workspace_rect.height() - 64.0).max(1.0),
         );
-        let scale = (padded.x / source.x)
+        let base_scale = (padded.x / source.x)
             .min(padded.y / source.y)
             .min(1.0)
             .max(0.01);
+
+        let (scroll_y, hover_pos, middle_down, pointer_delta) = ui.input(|i| {
+            (
+                i.raw_scroll_delta.y,
+                i.pointer.hover_pos(),
+                i.pointer.middle_down(),
+                i.pointer.delta(),
+            )
+        });
+
+        if let Some(pointer) = hover_pos.filter(|p| workspace_rect.contains(*p)) {
+            if scroll_y.abs() > f32::EPSILON {
+                let old_zoom = self.zoom;
+                let new_zoom = (old_zoom * (scroll_y * 0.0025).exp()).clamp(1.0, 12.0);
+                if (new_zoom - old_zoom).abs() > f32::EPSILON {
+                    let old_scale = base_scale * old_zoom;
+                    let old_display = source * old_scale;
+                    let old_canvas =
+                        Rect::from_center_size(workspace_rect.center() + self.pan, old_display);
+
+                    let image_x = (pointer.x - old_canvas.left()) / old_scale;
+                    let image_y = (pointer.y - old_canvas.top()) / old_scale;
+                    let new_scale = base_scale * new_zoom;
+                    let new_display = source * new_scale;
+                    let new_left = pointer.x - image_x * new_scale;
+                    let new_top = pointer.y - image_y * new_scale;
+                    let new_center =
+                        Pos2::new(new_left + new_display.x * 0.5, new_top + new_display.y * 0.5);
+
+                    self.zoom = new_zoom;
+                    self.pan = new_center - workspace_rect.center();
+                }
+            }
+
+            if middle_down {
+                self.pan += pointer_delta;
+                ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+            }
+        }
+
+        let scale = base_scale * self.zoom;
         let display = source * scale;
-        let canvas = Rect::from_center_size(workspace_rect.center(), display);
+        clamp_pan(&mut self.pan, display, workspace_rect.size());
+        let canvas = Rect::from_center_size(workspace_rect.center() + self.pan, display);
 
         painter.rect_filled(
             canvas.expand(12.0),
@@ -518,7 +695,7 @@ impl SlicerApp {
         );
 
         let response = ui.interact(
-            canvas,
+            workspace_rect,
             ui.id().with("scan_canvas"),
             Sense::click_and_drag(),
         );
@@ -533,9 +710,11 @@ impl SlicerApp {
                 )
             };
 
-            if response.drag_started() {
+            if response.drag_started_by(egui::PointerButton::Primary) {
                 if let Some((index, mode)) = self.hit_test(pointer, canvas, scale) {
+                    self.push_undo();
                     self.selected = Some(index);
+                    self.selected_mode = Some(mode);
                     self.drag = Some(ActiveDrag {
                         index,
                         mode,
@@ -544,10 +723,11 @@ impl SlicerApp {
                     });
                 } else {
                     self.selected = None;
+                    self.selected_mode = None;
                 }
             }
 
-            if response.dragged() {
+            if response.dragged_by(egui::PointerButton::Primary) {
                 if let Some(drag) = self.drag.as_ref() {
                     let now = image_pos(pointer);
                     let dx = now.x - drag.start_pointer.x;
@@ -565,12 +745,18 @@ impl SlicerApp {
                 ui.ctx().set_cursor_icon(drag_cursor(mode, false));
             }
 
-            if response.drag_stopped() {
+            if response.drag_stopped_by(egui::PointerButton::Primary) {
                 self.drag = None;
             }
 
-            if response.clicked() && self.drag.is_none() {
-                self.selected = self.hit_test(pointer, canvas, scale).map(|(i, _)| i);
+            if response.clicked_by(egui::PointerButton::Primary) && self.drag.is_none() {
+                if let Some((index, mode)) = self.hit_test(pointer, canvas, scale) {
+                    self.selected = Some(index);
+                    self.selected_mode = Some(mode);
+                } else {
+                    self.selected = None;
+                    self.selected_mode = None;
+                }
             }
         }
 
@@ -630,17 +816,44 @@ impl SlicerApp {
             );
 
             if selected {
-                for point in points {
+                let corner_modes = [
+                    DragMode::TopLeft,
+                    DragMode::TopRight,
+                    DragMode::BottomRight,
+                    DragMode::BottomLeft,
+                ];
+                for (point, mode) in points.into_iter().zip(corner_modes) {
                     painter.circle_filled(point, HANDLE_RADIUS, accent());
                     painter.circle_stroke(
                         point,
                         HANDLE_RADIUS,
-                        Stroke::new(2.0, Color32::from_black_alpha(220)),
+                        Stroke::new(
+                            if self.selected_mode == Some(mode) { 3.0 } else { 2.0 },
+                            if self.selected_mode == Some(mode) {
+                                Color32::WHITE
+                            } else {
+                                Color32::from_black_alpha(220)
+                            },
+                        ),
                     );
                 }
 
-                for point in edge_midpoints(points) {
-                    painter.circle_filled(point, EDGE_HANDLE_RADIUS, Color32::WHITE);
+                let edge_modes = [
+                    DragMode::TopEdge,
+                    DragMode::RightEdge,
+                    DragMode::BottomEdge,
+                    DragMode::LeftEdge,
+                ];
+                for (point, mode) in edge_midpoints(points).into_iter().zip(edge_modes) {
+                    painter.circle_filled(
+                        point,
+                        EDGE_HANDLE_RADIUS,
+                        if self.selected_mode == Some(mode) {
+                            accent()
+                        } else {
+                            Color32::WHITE
+                        },
+                    );
                     painter.circle_stroke(
                         point,
                         EDGE_HANDLE_RADIUS,
@@ -706,6 +919,7 @@ impl eframe::App for SlicerApp {
         self.poll_load(ctx);
         self.poll_detection();
         self.poll_export();
+        self.handle_shortcuts(ctx);
         if self.detecting || self.loading || self.exporting {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -826,6 +1040,57 @@ impl eframe::App for SlicerApp {
                     }
                 });
 
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let half = (ui.available_width() - 8.0) / 2.0;
+                    if ui
+                        .add_enabled(
+                            !self.undo_stack.is_empty() && !self.exporting,
+                            egui::Button::new("Undo")
+                                .min_size(Vec2::new(half, 34.0))
+                                .fill(surface())
+                                .stroke(Stroke::new(1.0, border()))
+                                .corner_radius(9),
+                        )
+                        .clicked()
+                    {
+                        self.undo();
+                    }
+
+                    if ui
+                        .add_enabled(
+                            !self.redo_stack.is_empty() && !self.exporting,
+                            egui::Button::new("Redo")
+                                .min_size(Vec2::new(half, 34.0))
+                                .fill(surface())
+                                .stroke(Stroke::new(1.0, border()))
+                                .corner_radius(9),
+                        )
+                        .clicked()
+                    {
+                        self.redo();
+                    }
+                });
+
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("View: {}%", (self.zoom * 100.0).round() as u32))
+                            .size(12.0)
+                            .color(muted()),
+                    );
+                    if ui
+                        .add_enabled(
+                            self.zoom > 1.001 || self.pan.length_sq() > 0.5,
+                            egui::Button::new("Reset view").small(),
+                        )
+                        .clicked()
+                    {
+                        self.zoom = 1.0;
+                        self.pan = Vec2::ZERO;
+                    }
+                });
+
                 ui.add_space(16.0);
                 ui.label(RichText::new("Crop padding").size(13.0).strong());
                 ui.label(
@@ -876,7 +1141,7 @@ impl eframe::App for SlicerApp {
                     }
                     ui.add_space(8.0);
                     ui.label(
-                        RichText::new("Drag a frame to move it. Drag corners freely, or edge handles to move an entire edge in parallel.")
+                        RichText::new("Wheel: zoom · middle-drag: pan · arrows: 1 px · Shift+arrows: 10 px · Ctrl+Z/Y: undo/redo.")
                             .size(11.5)
                             .color(muted()),
                     );
@@ -1022,6 +1287,24 @@ fn apply_drag(
     }
 
     set_rect_corners(rect, corners);
+}
+
+fn clamp_pan(pan: &mut Vec2, display: Vec2, viewport: Vec2) {
+    const MIN_VISIBLE: f32 = 80.0;
+
+    if display.x <= viewport.x {
+        pan.x = 0.0;
+    } else {
+        let max_pan = ((display.x + viewport.x) * 0.5 - MIN_VISIBLE).max(0.0);
+        pan.x = pan.x.clamp(-max_pan, max_pan);
+    }
+
+    if display.y <= viewport.y {
+        pan.y = 0.0;
+    } else {
+        let max_pan = ((display.y + viewport.y) * 0.5 - MIN_VISIBLE).max(0.0);
+        pan.y = pan.y.clamp(-max_pan, max_pan);
+    }
 }
 
 fn drag_target(rect: PhotoRect, mode: DragMode) -> Option<[f32; 2]> {
