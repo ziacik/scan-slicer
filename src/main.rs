@@ -47,6 +47,11 @@ struct DetectionResult {
     warning: Option<String>,
 }
 
+struct LoadResult {
+    path: PathBuf,
+    result: Result<DynamicImage, String>,
+}
+
 struct SlicerApp {
     image: Option<DynamicImage>,
     texture: Option<TextureHandle>,
@@ -61,12 +66,16 @@ struct SlicerApp {
     detection_rx: Receiver<DetectionResult>,
     detection_id: u64,
     detecting: bool,
+    load_tx: Sender<LoadResult>,
+    load_rx: Receiver<LoadResult>,
+    loading: bool,
 }
 
 impl SlicerApp {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let (job_tx, job_rx) = mpsc::channel::<DetectionJob>();
         let (result_tx, result_rx) = mpsc::channel::<DetectionResult>();
+        let (load_tx, load_rx) = mpsc::channel::<LoadResult>();
 
         thread::spawn(move || {
             while let Ok(job) = job_rx.recv() {
@@ -99,6 +108,9 @@ impl SlicerApp {
             detection_rx: result_rx,
             detection_id: 0,
             detecting: false,
+            load_tx,
+            load_rx,
+            loading: false,
         }
     }
 
@@ -110,17 +122,39 @@ impl SlicerApp {
             return;
         };
 
-        match image::open(&path) {
+        self.loading = true;
+        self.status = format!("Loading {}…", path.display());
+
+        let tx = self.load_tx.clone();
+        let repaint = ctx.clone();
+        thread::spawn(move || {
+            let result = image::open(&path).map_err(|error| error.to_string());
+            let _ = tx.send(LoadResult { path, result });
+            repaint.request_repaint();
+        });
+    }
+
+    fn poll_load(&mut self, ctx: &egui::Context) {
+        let Ok(loaded) = self.load_rx.try_recv() else {
+            return;
+        };
+        self.loading = false;
+
+        match loaded.result {
             Ok(image) => {
-                let rgba = image.to_rgba8();
-                let size = [rgba.width() as usize, rgba.height() as usize];
-                let color = ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+                // The original stays full-resolution for detection/export. The GPU only
+                // needs a preview large enough for the editor window.
+                const MAX_UI_PREVIEW_DIM: u32 = 2400;
+                let preview = image.thumbnail(MAX_UI_PREVIEW_DIM, MAX_UI_PREVIEW_DIM).to_rgba8();
+                let size = [preview.width() as usize, preview.height() as usize];
+                let color = ColorImage::from_rgba_unmultiplied(size, preview.as_raw());
                 self.texture = Some(ctx.load_texture("scan", color, TextureOptions::LINEAR));
                 self.image = Some(image);
-                self.image_path = Some(path.clone());
+                self.image_path = Some(loaded.path.clone());
+                self.boxes.clear();
                 self.selected = None;
                 self.drag = None;
-                self.status = format!("Loaded {}", path.display());
+                self.status = format!("Loaded {}", loaded.path.display());
                 self.redetect();
             }
             Err(error) => self.status = format!("Could not open image: {error}"),
@@ -404,19 +438,20 @@ impl SlicerApp {
 
 impl eframe::App for SlicerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_load(ctx);
         self.poll_detection();
-        if self.detecting {
+        if self.detecting || self.loading {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
-                if ui.button("Open scan").clicked() {
+                if ui.add_enabled(!self.loading, egui::Button::new("Open scan")).clicked() {
                     self.open_image(ctx);
                 }
                 if ui
                     .add_enabled(
-                        self.image.is_some() && !self.detecting,
+                        self.image.is_some() && !self.detecting && !self.loading,
                         egui::Button::new("Detect photos"),
                     )
                     .clicked()
