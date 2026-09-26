@@ -20,6 +20,7 @@ use imageproc::geometric_transformations::{warp_into, Border, Interpolation, Pro
 use crate::detection::{detect_photos, PhotoRect};
 
 const HANDLE_RADIUS: f32 = 7.0;
+const EDGE_HANDLE_RADIUS: f32 = 5.0;
 
 fn accent() -> Color32 {
     Color32::from_rgb(96, 137, 255)
@@ -71,6 +72,10 @@ enum DragMode {
     TopRight,
     BottomLeft,
     BottomRight,
+    TopEdge,
+    RightEdge,
+    BottomEdge,
+    LeftEdge,
 }
 
 struct ActiveDrag {
@@ -546,16 +551,10 @@ impl SlicerApp {
                     let mut rect = drag.start_rect;
                     apply_drag(&mut rect, drag.mode, dx, dy, image.width(), image.height());
                     self.boxes[drag.index] = rect;
-                    ui.ctx().set_cursor_icon(match drag.mode {
-                        DragMode::Move => CursorIcon::Grabbing,
-                        _ => CursorIcon::ResizeNwSe,
-                    });
+                    ui.ctx().set_cursor_icon(drag_cursor(drag.mode, true));
                 }
             } else if let Some((_, mode)) = self.hit_test(pointer, canvas, scale) {
-                ui.ctx().set_cursor_icon(match mode {
-                    DragMode::Move => CursorIcon::Grab,
-                    _ => CursorIcon::ResizeNwSe,
-                });
+                ui.ctx().set_cursor_icon(drag_cursor(mode, false));
             }
 
             if response.drag_stopped() {
@@ -631,6 +630,15 @@ impl SlicerApp {
                         Stroke::new(2.0, Color32::from_black_alpha(220)),
                     );
                 }
+
+                for point in edge_midpoints(points) {
+                    painter.circle_filled(point, EDGE_HANDLE_RADIUS, Color32::WHITE);
+                    painter.circle_stroke(
+                        point,
+                        EDGE_HANDLE_RADIUS,
+                        Stroke::new(2.0, Color32::from_black_alpha(220)),
+                    );
+                }
             }
         }
     }
@@ -647,6 +655,18 @@ impl SlicerApp {
 
             for (point, mode) in handles {
                 if point.distance(pointer) <= HANDLE_RADIUS + 5.0 {
+                    return Some((index, mode));
+                }
+            }
+
+            let edge_handles = [
+                (midpoint(points[0], points[1]), DragMode::TopEdge),
+                (midpoint(points[1], points[2]), DragMode::RightEdge),
+                (midpoint(points[2], points[3]), DragMode::BottomEdge),
+                (midpoint(points[3], points[0]), DragMode::LeftEdge),
+            ];
+            for (point, mode) in edge_handles {
+                if point.distance(pointer) <= EDGE_HANDLE_RADIUS + 6.0 {
                     return Some((index, mode));
                 }
             }
@@ -834,7 +854,7 @@ impl eframe::App for SlicerApp {
                     }
                     ui.add_space(8.0);
                     ui.label(
-                        RichText::new("Drag a frame to move it. Drag its corners to resize.")
+                        RichText::new("Drag a frame to move it. Drag corners freely, or edge handles to move an entire edge in parallel.")
                             .size(11.5)
                             .color(muted()),
                     );
@@ -918,13 +938,16 @@ fn apply_drag(
                 point[1] += dy;
             }
         }
-        mode => {
+        DragMode::TopLeft
+        | DragMode::TopRight
+        | DragMode::BottomRight
+        | DragMode::BottomLeft => {
             let index = match mode {
                 DragMode::TopLeft => 0,
                 DragMode::TopRight => 1,
                 DragMode::BottomRight => 2,
                 DragMode::BottomLeft => 3,
-                DragMode::Move => unreachable!(),
+                _ => unreachable!(),
             };
             corners[index][0] = (corners[index][0] + dx).clamp(0.0, image_w as f32);
             corners[index][1] = (corners[index][1] + dy).clamp(0.0, image_h as f32);
@@ -933,9 +956,127 @@ fn apply_drag(
                 return;
             }
         }
+        DragMode::TopEdge
+        | DragMode::RightEdge
+        | DragMode::BottomEdge
+        | DragMode::LeftEdge => {
+            let (a_index, b_index) = match mode {
+                DragMode::TopEdge => (0, 1),
+                DragMode::RightEdge => (1, 2),
+                DragMode::BottomEdge => (2, 3),
+                DragMode::LeftEdge => (3, 0),
+                _ => unreachable!(),
+            };
+
+            let a = corners[a_index];
+            let b = corners[b_index];
+            let edge_x = b[0] - a[0];
+            let edge_y = b[1] - a[1];
+            let edge_len = edge_x.hypot(edge_y);
+            if edge_len < 1.0 {
+                return;
+            }
+
+            let normal = [-edge_y / edge_len, edge_x / edge_len];
+            let desired_offset = dx * normal[0] + dy * normal[1];
+            let offset = clamp_edge_offset(
+                a,
+                b,
+                normal,
+                desired_offset,
+                image_w as f32,
+                image_h as f32,
+            );
+
+            corners[a_index][0] += normal[0] * offset;
+            corners[a_index][1] += normal[1] * offset;
+            corners[b_index][0] += normal[0] * offset;
+            corners[b_index][1] += normal[1] * offset;
+
+            if !is_valid_quad(corners) {
+                return;
+            }
+        }
     }
 
     set_rect_corners(rect, corners);
+}
+
+fn drag_cursor(mode: DragMode, active: bool) -> CursorIcon {
+    match mode {
+        DragMode::Move => {
+            if active {
+                CursorIcon::Grabbing
+            } else {
+                CursorIcon::Grab
+            }
+        }
+        DragMode::TopEdge | DragMode::BottomEdge => CursorIcon::ResizeVertical,
+        DragMode::LeftEdge | DragMode::RightEdge => CursorIcon::ResizeHorizontal,
+        DragMode::TopLeft | DragMode::BottomRight => CursorIcon::ResizeNwSe,
+        DragMode::TopRight | DragMode::BottomLeft => CursorIcon::ResizeNeSw,
+    }
+}
+
+fn midpoint(a: Pos2, b: Pos2) -> Pos2 {
+    Pos2::new((a.x + b.x) * 0.5, (a.y + b.y) * 0.5)
+}
+
+fn edge_midpoints(points: [Pos2; 4]) -> [Pos2; 4] {
+    [
+        midpoint(points[0], points[1]),
+        midpoint(points[1], points[2]),
+        midpoint(points[2], points[3]),
+        midpoint(points[3], points[0]),
+    ]
+}
+
+fn clamp_edge_offset(
+    a: [f32; 2],
+    b: [f32; 2],
+    normal: [f32; 2],
+    desired: f32,
+    image_w: f32,
+    image_h: f32,
+) -> f32 {
+    let mut min_offset = f32::NEG_INFINITY;
+    let mut max_offset = f32::INFINITY;
+
+    for point in [a, b] {
+        constrain_offset_axis(
+            point[0],
+            normal[0],
+            image_w,
+            &mut min_offset,
+            &mut max_offset,
+        );
+        constrain_offset_axis(
+            point[1],
+            normal[1],
+            image_h,
+            &mut min_offset,
+            &mut max_offset,
+        );
+    }
+
+    desired.clamp(min_offset, max_offset)
+}
+
+fn constrain_offset_axis(
+    position: f32,
+    direction: f32,
+    max_position: f32,
+    min_offset: &mut f32,
+    max_offset: &mut f32,
+) {
+    if direction.abs() < 1e-6 {
+        return;
+    }
+
+    let first = -position / direction;
+    let second = (max_position - position) / direction;
+    *min_offset = (*min_offset).max(first.min(second));
+    *max_offset = (*max_offset).min(first.max(second));
 }
 
 fn rect_image_corners(rect: PhotoRect) -> [[f32; 2]; 4] {
@@ -1116,6 +1257,44 @@ mod tests {
                 [35.0, 112.0],
             ]
         );
+    }
+
+    #[test]
+    fn dragging_an_edge_moves_both_endpoints_in_parallel() {
+        let mut rect = PhotoRect {
+            x: 10,
+            y: 10,
+            w: 120,
+            h: 100,
+            corners: Some([
+                [20.0, 30.0],
+                [120.0, 20.0],
+                [130.0, 100.0],
+                [30.0, 110.0],
+            ]),
+        };
+
+        let before = rect.corners.unwrap();
+        let before_vector = [
+            before[1][0] - before[0][0],
+            before[1][1] - before[0][1],
+        ];
+
+        apply_drag(&mut rect, DragMode::TopEdge, 5.0, -15.0, 200, 200);
+
+        let after = rect.corners.unwrap();
+        let after_vector = [
+            after[1][0] - after[0][0],
+            after[1][1] - after[0][1],
+        ];
+        let shift_a = [after[0][0] - before[0][0], after[0][1] - before[0][1]];
+        let shift_b = [after[1][0] - before[1][0], after[1][1] - before[1][1]];
+
+        assert!((after_vector[0] - before_vector[0]).abs() < 0.001);
+        assert!((after_vector[1] - before_vector[1]).abs() < 0.001);
+        assert!((shift_a[0] - shift_b[0]).abs() < 0.001);
+        assert!((shift_a[1] - shift_b[1]).abs() < 0.001);
+        assert!((shift_a[0] * before_vector[0] + shift_a[1] * before_vector[1]).abs() < 0.01);
     }
 
     #[test]
