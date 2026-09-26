@@ -497,9 +497,14 @@ impl SlicerApp {
     }
 
     fn nudge_selected(&mut self, dx: f32, dy: f32) {
-        let (Some(index), Some(image)) = (self.selected, self.image.as_ref()) else {
+        let Some(index) = self.selected else {
             return;
         };
+        let Some(image) = self.image.as_ref() else {
+            return;
+        };
+        let image_w = image.width();
+        let image_h = image.height();
         if index >= self.boxes.len() {
             return;
         }
@@ -507,7 +512,7 @@ impl SlicerApp {
         let mode = self.selected_mode.unwrap_or(DragMode::Move);
         self.push_undo();
         let mut rect = self.boxes[index];
-        apply_drag(&mut rect, mode, dx, dy, image.width(), image.height());
+        apply_drag(&mut rect, mode, dx, dy, image_w, image_h);
         self.boxes[index] = rect;
     }
 
@@ -556,14 +561,16 @@ impl SlicerApp {
         let Some(image) = self.image.as_ref() else {
             return;
         };
+        let image_w = image.width();
+        let image_h = image.height();
 
         self.push_undo();
 
-        let w = (image.width() / 3).max(100);
-        let h = (image.height() / 3).max(100);
+        let w = (image_w / 3).max(100);
+        let h = (image_h / 3).max(100);
         let rect = PhotoRect {
-            x: (image.width().saturating_sub(w)) / 2,
-            y: (image.height().saturating_sub(h)) / 2,
+            x: (image_w.saturating_sub(w)) / 2,
+            y: (image_h.saturating_sub(h)) / 2,
             w,
             h,
             corners: None,
@@ -590,7 +597,10 @@ impl SlicerApp {
         let painter = ui.painter_at(workspace_rect);
         painter.rect_filled(workspace_rect, 0.0, workspace());
 
-        let (Some(texture), Some(image)) = (self.texture.as_ref(), self.image.as_ref()) else {
+        let (Some(texture), Some(image)) = (
+            self.texture.clone(),
+            self.image.as_ref().map(Arc::clone),
+        ) else {
             let card = Rect::from_center_size(
                 workspace_rect.center(),
                 Vec2::new(
@@ -866,7 +876,7 @@ impl SlicerApp {
         if let Some((pointer, target)) = magnifier {
             draw_magnifier(
                 &painter,
-                texture,
+                &texture,
                 workspace_rect,
                 canvas,
                 scale,
