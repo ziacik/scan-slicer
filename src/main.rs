@@ -581,7 +581,7 @@ impl eframe::App for SlicerApp {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.add_space(18.0);
                         if self.loading || self.detecting {
-                            ui.spinner();
+                            ui.add(egui::Spinner::new().size(16.0));
                         }
                         ui.label(
                             RichText::new(format!(
@@ -736,11 +736,10 @@ impl eframe::App for SlicerApp {
         egui::TopBottomPanel::bottom("status")
             .exact_height(42.0)
             .show(ctx, |ui| {
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.add_space(12.0);
                     if self.loading || self.detecting {
-                        ui.spinner();
+                        ui.add(egui::Spinner::new().size(16.0));
                     }
                     ui.label(RichText::new(&self.status).size(12.5).color(muted()));
                 });
