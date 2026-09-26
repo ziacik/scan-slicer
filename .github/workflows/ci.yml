@@ -16,7 +16,7 @@ jobs:
       - name: Install system dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed git rust cargo base-devel
+          pacman -S --noconfirm --needed git rust cargo base-devel gtk4 libadwaita
 
       - name: Checkout
         uses: actions/checkout@v4
