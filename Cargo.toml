@@ -6,8 +6,9 @@ description = "A small desktop app for splitting scanned photo sheets into indiv
 license = "MIT"
 
 [dependencies]
-eframe = "0.33"
-egui_extras = { version = "0.33", features = ["image"] }
+gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_4"] }
+gdk-pixbuf = "0.22"
 image = { version = "0.25", features = ["png", "jpeg", "tiff"] }
 imageproc = { version = "0.27", default-features = false }
 rfd = "0.15"
@@ -16,4 +17,3 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
-dark-light = "2"
