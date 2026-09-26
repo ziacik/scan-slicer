@@ -8,6 +8,7 @@ use std::{
         Arc,
     },
     thread,
+    time::{Duration, Instant},
 };
 
 use eframe::egui::{
@@ -25,7 +26,6 @@ const MAGNIFIER_SIZE: f32 = 150.0;
 const MAGNIFIER_ZOOM: f32 = 5.0;
 
 fn accent() -> Color32 {
-    // GNOME/libadwaita blue.
     Color32::from_rgb(53, 132, 228)
 }
 
@@ -33,27 +33,59 @@ fn accent_hover() -> Color32 {
     Color32::from_rgb(28, 113, 216)
 }
 
-fn panel_bg() -> Color32 {
-    Color32::from_rgb(246, 245, 244)
+fn panel_bg(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(30, 30, 30)
+    } else {
+        Color32::from_rgb(246, 245, 244)
+    }
 }
 
-fn surface() -> Color32 {
-    Color32::WHITE
+fn surface(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(48, 48, 48)
+    } else {
+        Color32::WHITE
+    }
+}
+
+fn control_bg(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(61, 61, 61)
+    } else {
+        Color32::from_rgb(238, 237, 235)
+    }
 }
 
 fn workspace() -> Color32 {
     Color32::from_rgb(36, 36, 36)
 }
 
-fn border() -> Color32 {
-    Color32::from_rgb(218, 216, 214)
+fn border(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(74, 74, 74)
+    } else {
+        Color32::from_rgb(218, 216, 214)
+    }
 }
 
-fn muted() -> Color32 {
-    Color32::from_rgb(119, 118, 123)
+fn muted(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(181, 181, 181)
+    } else {
+        Color32::from_rgb(119, 118, 123)
+    }
 }
 
-fn canvas_muted() -> Color32 {
+fn foreground(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(238, 238, 238)
+    } else {
+        Color32::from_rgb(45, 45, 45)
+    }
+}
+
+fn canvas_muted(ui.visuals().dark_mode) -> Color32 {
     Color32::from_rgb(190, 190, 190)
 }
 
@@ -61,25 +93,36 @@ fn destructive() -> Color32 {
     Color32::from_rgb(192, 28, 40)
 }
 
+fn system_theme(ctx: &egui::Context) -> egui::Theme {
+    match dark_light::detect() {
+        Ok(dark_light::Mode::Dark) => egui::Theme::Dark,
+        Ok(dark_light::Mode::Light) => egui::Theme::Light,
+        Ok(dark_light::Mode::Unspecified) | Err(_) => {
+            ctx.system_theme().unwrap_or(egui::Theme::Light)
+        }
+    }
+}
+
 fn action_button(ui: &mut egui::Ui, label: &str, enabled: bool, primary: bool) -> bool {
+    let dark = ui.visuals().dark_mode;
     let fill = if !enabled {
-        Color32::from_rgb(224, 222, 220)
+        control_bg(dark)
     } else if primary {
         accent()
     } else {
-        surface()
+        surface(dark)
     };
     let stroke = if primary && enabled {
         Stroke::NONE
     } else {
-        Stroke::new(1.0, border())
+        Stroke::new(1.0, border(dark))
     };
     let text_color = if !enabled {
-        Color32::from_rgb(146, 144, 141)
+        muted(dark)
     } else if primary {
         Color32::WHITE
     } else {
-        Color32::from_rgb(45, 45, 45)
+        foreground(dark)
     };
 
     ui.add_enabled(
@@ -180,6 +223,8 @@ struct SlicerApp {
     export_tx: Sender<ExportEvent>,
     export_rx: Receiver<ExportEvent>,
     exporting: bool,
+    theme_check_at: Instant,
+    applied_theme: egui::Theme,
 }
 
 impl SlicerApp {
@@ -189,25 +234,35 @@ impl SlicerApp {
         let (load_tx, load_rx) = mpsc::channel::<LoadResult>();
         let (export_tx, export_rx) = mpsc::channel::<ExportEvent>();
 
-        let mut visuals = egui::Visuals::light();
-        visuals.panel_fill = panel_bg();
-        visuals.window_fill = panel_bg();
-        visuals.extreme_bg_color = Color32::from_rgb(235, 233, 231);
-        visuals.faint_bg_color = Color32::from_rgb(238, 237, 235);
-        visuals.selection.bg_fill = accent();
-        visuals.selection.stroke = Stroke::new(1.0, accent());
-        visuals.hyperlink_color = accent_hover();
-        visuals.widgets.inactive.bg_fill = Color32::from_rgb(238, 237, 235);
-        visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(238, 237, 235);
-        visuals.widgets.hovered.bg_fill = Color32::from_rgb(229, 227, 224);
-        visuals.widgets.active.bg_fill = Color32::from_rgb(220, 218, 215);
-        _cc.egui_ctx.set_visuals(visuals);
+        let initial_theme = system_theme(&_cc.egui_ctx);
+        _cc.egui_ctx.set_theme(initial_theme);
 
-        let mut style = (*_cc.egui_ctx.style()).clone();
-        style.spacing.item_spacing = Vec2::new(8.0, 8.0);
-        style.spacing.button_padding = Vec2::new(12.0, 7.0);
-        style.spacing.interact_size.y = 34.0;
-        _cc.egui_ctx.set_style(style);
+        _cc.egui_ctx.all_styles_mut(|style| {
+            let dark = style.visuals.dark_mode;
+            style.spacing.item_spacing = Vec2::new(8.0, 8.0);
+            style.spacing.button_padding = Vec2::new(12.0, 7.0);
+            style.spacing.interact_size.y = 34.0;
+
+            style.visuals.panel_fill = panel_bg(dark);
+            style.visuals.window_fill = panel_bg(dark);
+            style.visuals.extreme_bg_color = control_bg(dark);
+            style.visuals.faint_bg_color = control_bg(dark);
+            style.visuals.selection.bg_fill = accent();
+            style.visuals.selection.stroke = Stroke::new(1.0, accent());
+            style.visuals.hyperlink_color = accent_hover();
+            style.visuals.widgets.inactive.bg_fill = control_bg(dark);
+            style.visuals.widgets.inactive.weak_bg_fill = control_bg(dark);
+            style.visuals.widgets.hovered.bg_fill = if dark {
+                Color32::from_rgb(72, 72, 72)
+            } else {
+                Color32::from_rgb(229, 227, 224)
+            };
+            style.visuals.widgets.active.bg_fill = if dark {
+                Color32::from_rgb(82, 82, 82)
+            } else {
+                Color32::from_rgb(220, 218, 215)
+            };
+        });
 
         thread::spawn(move || {
             while let Ok(job) = job_rx.recv() {
@@ -250,6 +305,8 @@ impl SlicerApp {
             export_tx,
             export_rx,
             exporting: false,
+            theme_check_at: Instant::now(),
+            applied_theme: initial_theme,
         }
     }
 
@@ -685,7 +742,7 @@ impl SlicerApp {
                 egui::Align2::CENTER_CENTER,
                 "PNG, JPEG or TIFF",
                 FontId::proportional(13.0),
-                canvas_muted(),
+                canvas_muted(ui.visuals().dark_mode),
             );
             return;
         };
@@ -988,16 +1045,28 @@ impl eframe::App for SlicerApp {
         self.poll_detection();
         self.poll_export();
         self.handle_shortcuts(ctx);
+
+        if self.theme_check_at.elapsed() >= Duration::from_secs(1) {
+            self.theme_check_at = Instant::now();
+            let theme = system_theme(ctx);
+            if theme != self.applied_theme {
+                self.applied_theme = theme;
+                ctx.set_theme(theme);
+                ctx.request_repaint();
+            }
+        }
         if self.detecting || self.loading || self.exporting {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
+
+        let dark = ctx.style().visuals.dark_mode;
 
         egui::SidePanel::left("sidebar")
             .exact_width(300.0)
             .resizable(false)
             .frame(
                 egui::Frame::new()
-                    .fill(panel_bg())
+                    .fill(panel_bg(dark))
                     .inner_margin(egui::Margin::same(14)),
             )
             .show(ctx, |ui| {
@@ -1006,13 +1075,13 @@ impl eframe::App for SlicerApp {
                     RichText::new("Scan")
                         .size(18.0)
                         .strong()
-                        .color(Color32::from_rgb(45, 45, 45)),
+                        .color(foreground(ui.visuals().dark_mode)),
                 );
                 ui.add_space(6.0);
 
                 egui::Frame::new()
-                    .fill(surface())
-                    .stroke(Stroke::new(1.0, border()))
+                    .fill(surface(ui.visuals().dark_mode))
+                    .stroke(Stroke::new(1.0, border(ui.visuals().dark_mode)))
                     .corner_radius(12)
                     .inner_margin(egui::Margin::same(13))
                     .show(ui, |ui| {
@@ -1027,7 +1096,7 @@ impl eframe::App for SlicerApp {
                                 )
                                 .size(14.0)
                                 .strong()
-                                .color(Color32::from_rgb(45, 45, 45)),
+                                .color(foreground(ui.visuals().dark_mode)),
                             );
                             ui.label(
                                 RichText::new(format!(
@@ -1036,19 +1105,19 @@ impl eframe::App for SlicerApp {
                                     image.height()
                                 ))
                                 .size(12.0)
-                                .color(muted()),
+                                .color(muted(ui.visuals().dark_mode)),
                             );
                         } else {
                             ui.label(
                                 RichText::new("No scan loaded")
                                     .size(14.0)
                                     .strong()
-                                    .color(Color32::from_rgb(45, 45, 45)),
+                                    .color(foreground(ui.visuals().dark_mode)),
                             );
                             ui.label(
                                 RichText::new("Choose an image to get started")
                                     .size(12.0)
-                                    .color(muted()),
+                                    .color(muted(ui.visuals().dark_mode)),
                             );
                         }
 
@@ -1065,10 +1134,10 @@ impl eframe::App for SlicerApp {
                                         RichText::new("Open…")
                                             .size(13.0)
                                             .strong()
-                                            .color(Color32::from_rgb(45, 45, 45)),
+                                            .color(foreground(ui.visuals().dark_mode)),
                                     )
                                     .min_size(Vec2::new(width, 34.0))
-                                    .fill(Color32::from_rgb(238, 237, 235))
+                                    .fill(control_bg(dark))
                                     .stroke(Stroke::NONE)
                                     .corner_radius(8),
                                 )
@@ -1091,10 +1160,10 @@ impl eframe::App for SlicerApp {
                                         })
                                         .size(13.0)
                                         .strong()
-                                        .color(Color32::from_rgb(45, 45, 45)),
+                                        .color(foreground(ui.visuals().dark_mode)),
                                     )
                                     .min_size(Vec2::new(width, 34.0))
-                                    .fill(Color32::from_rgb(238, 237, 235))
+                                    .fill(control_bg(dark))
                                     .stroke(Stroke::NONE)
                                     .corner_radius(8),
                                 )
@@ -1110,13 +1179,13 @@ impl eframe::App for SlicerApp {
                     RichText::new("Frames")
                         .size(18.0)
                         .strong()
-                        .color(Color32::from_rgb(45, 45, 45)),
+                        .color(foreground(ui.visuals().dark_mode)),
                 );
                 ui.add_space(6.0);
 
                 egui::Frame::new()
-                    .fill(surface())
-                    .stroke(Stroke::new(1.0, border()))
+                    .fill(surface(ui.visuals().dark_mode))
+                    .stroke(Stroke::new(1.0, border(ui.visuals().dark_mode)))
                     .corner_radius(12)
                     .inner_margin(egui::Margin::same(10))
                     .show(ui, |ui| {
@@ -1128,7 +1197,7 @@ impl eframe::App for SlicerApp {
                                     self.image.is_some() && !self.exporting,
                                     egui::Button::new("+")
                                         .min_size(Vec2::new(width, 34.0))
-                                        .fill(Color32::from_rgb(238, 237, 235))
+                                        .fill(control_bg(dark))
                                         .stroke(Stroke::NONE)
                                         .corner_radius(8),
                                 )
@@ -1145,7 +1214,7 @@ impl eframe::App for SlicerApp {
                                         RichText::new("−").color(destructive()).strong(),
                                     )
                                     .min_size(Vec2::new(width, 34.0))
-                                    .fill(Color32::from_rgb(238, 237, 235))
+                                    .fill(control_bg(dark))
                                     .stroke(Stroke::NONE)
                                     .corner_radius(8),
                                 )
@@ -1160,7 +1229,7 @@ impl eframe::App for SlicerApp {
                                     !self.undo_stack.is_empty() && !self.exporting,
                                     egui::Button::new("↶")
                                         .min_size(Vec2::new(width, 34.0))
-                                        .fill(Color32::from_rgb(238, 237, 235))
+                                        .fill(control_bg(dark))
                                         .stroke(Stroke::NONE)
                                         .corner_radius(8),
                                 )
@@ -1175,7 +1244,7 @@ impl eframe::App for SlicerApp {
                                     !self.redo_stack.is_empty() && !self.exporting,
                                     egui::Button::new("↷")
                                         .min_size(Vec2::new(width, 34.0))
-                                        .fill(Color32::from_rgb(238, 237, 235))
+                                        .fill(control_bg(dark))
                                         .stroke(Stroke::NONE)
                                         .corner_radius(8),
                                 )
@@ -1195,7 +1264,7 @@ impl eframe::App for SlicerApp {
                                     if self.boxes.len() == 1 { "" } else { "s" }
                                 ))
                                 .size(12.0)
-                                .color(muted()),
+                                .color(muted(ui.visuals().dark_mode)),
                             );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if ui
@@ -1220,7 +1289,7 @@ impl eframe::App for SlicerApp {
                                         (self.zoom * 100.0).round() as u32
                                     ))
                                     .size(12.0)
-                                    .color(muted()),
+                                    .color(muted(ui.visuals().dark_mode)),
                                 );
                             });
                         });
@@ -1231,13 +1300,13 @@ impl eframe::App for SlicerApp {
                     RichText::new("Crop")
                         .size(18.0)
                         .strong()
-                        .color(Color32::from_rgb(45, 45, 45)),
+                        .color(foreground(ui.visuals().dark_mode)),
                 );
                 ui.add_space(6.0);
 
                 egui::Frame::new()
-                    .fill(surface())
-                    .stroke(Stroke::new(1.0, border()))
+                    .fill(surface(ui.visuals().dark_mode))
+                    .stroke(Stroke::new(1.0, border(ui.visuals().dark_mode)))
                     .corner_radius(12)
                     .inner_margin(egui::Margin::same(13))
                     .show(ui, |ui| {
@@ -1246,13 +1315,13 @@ impl eframe::App for SlicerApp {
                                 RichText::new("Padding")
                                     .size(13.0)
                                     .strong()
-                                    .color(Color32::from_rgb(45, 45, 45)),
+                                    .color(foreground(ui.visuals().dark_mode)),
                             );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 ui.label(
                                     RichText::new(format!("{} px", self.margin))
                                         .size(12.0)
-                                        .color(muted()),
+                                        .color(muted(ui.visuals().dark_mode)),
                                 );
                             });
                         });
@@ -1273,13 +1342,13 @@ impl eframe::App for SlicerApp {
                                         RichText::new(format!("Frame {}", index + 1))
                                             .size(12.5)
                                             .strong()
-                                            .color(Color32::from_rgb(45, 45, 45)),
+                                            .color(foreground(ui.visuals().dark_mode)),
                                     );
                                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                         ui.label(
                                             RichText::new(format!("{} × {} px", rect.w, rect.h))
                                                 .size(12.0)
-                                                .color(muted()),
+                                                .color(muted(ui.visuals().dark_mode)),
                                         );
                                     });
                                 });
@@ -1294,7 +1363,7 @@ impl eframe::App for SlicerApp {
                             "Wheel zooms · middle-drag pans · arrows nudge · Ctrl+Z/Y undo/redo",
                         )
                         .size(10.5)
-                        .color(muted()),
+                        .color(muted(ui.visuals().dark_mode)),
                     );
                     ui.add_space(8.0);
                     if action_button(
@@ -1315,7 +1384,7 @@ impl eframe::App for SlicerApp {
             .exact_height(34.0)
             .frame(
                 egui::Frame::new()
-                    .fill(panel_bg())
+                    .fill(panel_bg(dark))
                     .inner_margin(egui::Margin::symmetric(10, 0)),
             )
             .show(ctx, |ui| {
@@ -1323,7 +1392,7 @@ impl eframe::App for SlicerApp {
                     if self.loading || self.detecting || self.exporting {
                         ui.add(egui::Spinner::new().size(14.0));
                     }
-                    ui.label(RichText::new(&self.status).size(11.5).color(muted()));
+                    ui.label(RichText::new(&self.status).size(11.5).color(muted(ui.visuals().dark_mode)));
                 });
             });
 
