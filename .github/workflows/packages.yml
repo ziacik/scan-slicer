@@ -13,8 +13,41 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  validate:
+    name: Validate packaging
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install validation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y appstream desktop-file-utils librsvg2-bin
+
+      - name: Validate desktop integration
+        run: |
+          desktop-file-validate packaging/com.github.ziacik.ScanSlicer.desktop
+          appstreamcli validate --no-net packaging/com.github.ziacik.ScanSlicer.metainfo.xml
+          rsvg-convert -w 128 -h 128 packaging/com.github.ziacik.ScanSlicer.svg -o /tmp/scan-slicer-icon.png
+          test -s /tmp/scan-slicer-icon.png
+
+      - name: Verify tag matches Cargo version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [[ "$cargo_version" != "$tag_version" ]]; then
+            echo "Tag version v$tag_version does not match Cargo.toml version $cargo_version" >&2
+            exit 1
+          fi
+
   deb-appimage:
     name: Debian + AppImage
+    needs: validate
     runs-on: ubuntu-24.04
 
     steps:
@@ -68,14 +101,16 @@ jobs:
           Priority: optional
           Architecture: $arch
           Maintainer: ziacik
-          Depends: libgtk-4-1 (>= 4.12), libadwaita-1-0 (>= 1.4), libgdk-pixbuf-2.0-0
+          Depends: libgtk-4-1 (>= 4.12), libadwaita-1-0 (>= 1.4), libgdk-pixbuf-2.0-0, hicolor-icon-theme
           Recommends: sane-utils
           Homepage: https://github.com/ziacik/scan-slicer
           Description: Split scanned photo sheets into individual images.
           EOF
 
-          dpkg-deb --root-owner-group --build \
-            "$pkgroot" "dist/scan-slicer_${version}_${arch}.deb"
+          deb="dist/scan-slicer_${version}_${arch}.deb"
+          dpkg-deb --root-owner-group --build "$pkgroot" "$deb"
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb"
 
       - name: Build AppImage
         shell: bash
@@ -116,6 +151,7 @@ jobs:
           image="$(find . -maxdepth 1 -type f -name '*.AppImage' ! -name 'linuxdeploy-*' -print -quit)"
           test -n "$image"
           mv "$image" "dist/scan-slicer_${version}_x86_64.AppImage"
+          chmod +x "dist/scan-slicer_${version}_x86_64.AppImage"
 
       - name: Upload Debian and AppImage artifacts
         uses: actions/upload-artifact@v4
@@ -125,9 +161,11 @@ jobs:
             dist/*.deb
             dist/*.AppImage
           if-no-files-found: error
+          retention-days: 14
 
   arch:
     name: Arch Linux
+    needs: validate
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -144,6 +182,7 @@ jobs:
             cargo \
             git \
             gtk4 \
+            hicolor-icon-theme \
             libadwaita \
             rust \
             sane
@@ -176,7 +215,7 @@ jobs:
           arch=('x86_64')
           url='https://github.com/ziacik/scan-slicer'
           license=('MIT')
-          depends=('gtk4' 'libadwaita')
+          depends=('gtk4' 'libadwaita' 'hicolor-icon-theme')
           optdepends=('sane: scanner acquisition support')
           source=('scan-slicer' 'com.github.ziacik.ScanSlicer.desktop' 'com.github.ziacik.ScanSlicer.svg' 'com.github.ziacik.ScanSlicer.metainfo.xml' 'LICENSE')
           sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
@@ -198,6 +237,8 @@ jobs:
           su builder -s /bin/bash -c "cd '$builddir' && makepkg --noconfirm --force"
 
           cp "$builddir"/*.pkg.tar.zst dist/
+          pacman -Qp dist/*.pkg.tar.zst
+          bsdtar -tf dist/*.pkg.tar.zst
 
       - name: Upload Arch artifact
         uses: actions/upload-artifact@v4
@@ -205,6 +246,7 @@ jobs:
           name: scan-slicer-arch
           path: dist/*.pkg.tar.zst
           if-no-files-found: error
+          retention-days: 14
 
   release:
     name: Publish GitHub Release assets
@@ -220,10 +262,14 @@ jobs:
           path: release
           merge-multiple: true
 
+      - name: Generate checksums
+        working-directory: release
+        run: sha256sum * > SHA256SUMS
+
       - name: Create release and upload packages
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
-            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+            gh release create "$GITHUB_REF_NAME" --title "Scan Slicer $GITHUB_REF_NAME" --generate-notes
           gh release upload "$GITHUB_REF_NAME" release/* --clobber
