@@ -2,6 +2,7 @@ name: Packages
 
 on:
   push:
+    branches: [master]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -214,6 +215,7 @@ jobs:
           arch=('x86_64')
           url='https://github.com/ziacik/scan-slicer'
           license=('MIT')
+          options=('!debug')
           depends=('gtk4' 'libadwaita' 'hicolor-icon-theme')
           optdepends=('sane: scanner acquisition support')
           source=('scan-slicer' 'com.github.ziacik.ScanSlicer.desktop' 'com.github.ziacik.ScanSlicer.svg' 'com.github.ziacik.ScanSlicer.metainfo.xml' 'LICENSE')
@@ -235,9 +237,12 @@ jobs:
           chown -R builder:builder "$builddir"
           su builder -s /bin/bash -c "cd '$builddir' && makepkg --noconfirm --force"
 
-          cp "$builddir"/*.pkg.tar.zst dist/
-          pacman -Qp dist/*.pkg.tar.zst
-          bsdtar -tf dist/*.pkg.tar.zst
+          mainpkg="$(find "$builddir" -maxdepth 1 -type f -name 'scan-slicer-[0-9]*-x86_64.pkg.tar.zst' ! -name '*debug*' -print -quit)"
+          test -n "$mainpkg"
+          cp "$mainpkg" dist/
+          pkg="dist/$(basename "$mainpkg")"
+          pacman -Qp "$pkg"
+          bsdtar -tf "$pkg"
 
       - name: Upload Arch artifact
         uses: actions/upload-artifact@v4
