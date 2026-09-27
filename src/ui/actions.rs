@@ -16,6 +16,7 @@ use crate::{
     detection::detect_photos,
     editor,
     scanner::{self, ScannerDevice},
+    settings,
 };
 
 use super::{
@@ -75,6 +76,15 @@ pub(super) fn connect_actions(state: &Rc<RefCell<AppState>>, ui: &Ui) {
         let button = ui.export_button.clone();
         button.connect_clicked(move |_| {
             start_export(state.clone(), ui.clone());
+        });
+    }
+
+    {
+        let state = state.clone();
+        let ui = ui.clone();
+        let button = ui.api_key_button.clone();
+        button.connect_clicked(move |_| {
+            show_api_key_dialog(state.clone(), ui.clone(), false);
         });
     }
 
@@ -152,6 +162,208 @@ pub(super) fn connect_actions(state: &Rc<RefCell<AppState>>, ui: &Ui) {
             refresh_ui(&state.borrow(), &ui);
         });
     }
+}
+
+fn show_api_key_dialog(state: Rc<RefCell<AppState>>, ui: Ui, retry_detection: bool) {
+    if state.borrow().busy != Busy::None {
+        return;
+    }
+
+    let dialog = gtk::Dialog::builder()
+        .title("OpenAI API Key")
+        .transient_for(&ui.window)
+        .modal(true)
+        .resizable(false)
+        .build();
+
+    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    dialog.add_button("Remove Saved Key", gtk::ResponseType::Other(1));
+    dialog.add_button("Save", gtk::ResponseType::Accept);
+    dialog.set_default_response(gtk::ResponseType::Accept);
+    dialog.set_response_sensitive(gtk::ResponseType::Accept, false);
+
+    let content = dialog.content_area();
+    content.set_spacing(12);
+    content.set_margin_top(18);
+    content.set_margin_bottom(18);
+    content.set_margin_start(18);
+    content.set_margin_end(18);
+
+    let description = gtk::Label::new(Some(
+        "Photo detection uses your own OpenAI API key. The key is stored securely in your system keyring and is never built into Scan Slicer.",
+    ));
+    description.set_wrap(true);
+    description.set_xalign(0.0);
+    description.set_max_width_chars(54);
+
+    let api_key_entry = gtk::PasswordEntry::new();
+    api_key_entry.set_show_peek_icon(true);
+    api_key_entry.set_placeholder_text(Some("Paste an OpenAI API key"));
+    api_key_entry.set_hexpand(true);
+
+    let billing_hint = gtk::Label::new(Some(
+        "OpenAI API usage is billed separately from a ChatGPT subscription.",
+    ));
+    billing_hint.set_wrap(true);
+    billing_hint.set_xalign(0.0);
+    billing_hint.add_css_class("dim-label");
+
+    let create_key_link = gtk::LinkButton::with_label(
+        "https://platform.openai.com/api-keys",
+        "Create an API key…",
+    );
+    create_key_link.set_halign(gtk::Align::Start);
+
+    content.append(&description);
+    content.append(&api_key_entry);
+    content.append(&billing_hint);
+    content.append(&create_key_link);
+
+    {
+        let dialog = dialog.clone();
+        api_key_entry.connect_changed(move |entry| {
+            dialog.set_response_sensitive(
+                gtk::ResponseType::Accept,
+                !entry.text().trim().is_empty(),
+            );
+        });
+    }
+
+    dialog.connect_response(move |dialog, response| {
+        match response {
+            gtk::ResponseType::Accept => {
+                let api_key = api_key_entry.text().trim().to_owned();
+                if api_key.is_empty() {
+                    return;
+                }
+                dialog.close();
+                save_api_key(state.clone(), ui.clone(), api_key, retry_detection);
+            }
+            gtk::ResponseType::Other(1) => {
+                dialog.close();
+                remove_api_key(state.clone(), ui.clone());
+            }
+            _ => dialog.close(),
+        }
+    });
+
+    dialog.present();
+    api_key_entry.grab_focus();
+}
+
+fn save_api_key(
+    state: Rc<RefCell<AppState>>,
+    ui: Ui,
+    api_key: String,
+    retry_detection: bool,
+) {
+    {
+        let mut st = state.borrow_mut();
+        st.busy = Busy::SavingSettings;
+        st.status = "Saving OpenAI API key…".into();
+    }
+    refresh_ui(&state.borrow(), &ui);
+
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = settings::save_openai_api_key(&api_key).map_err(|error| error.to_string());
+        let _ = tx.send(result);
+    });
+
+    glib::timeout_add_local(Duration::from_millis(50), move || match rx.try_recv() {
+        Ok(result) => {
+            match result {
+                Ok(()) => {
+                    {
+                        let mut st = state.borrow_mut();
+                        st.busy = Busy::None;
+                        st.status = "OpenAI API key saved securely.".into();
+                    }
+                    refresh_ui(&state.borrow(), &ui);
+                    ui.toast_overlay
+                        .add_toast(adw::Toast::new("OpenAI API key saved"));
+
+                    if retry_detection && state.borrow().image.is_some() {
+                        start_detection(state.clone(), ui.clone());
+                    }
+                }
+                Err(error) => {
+                    {
+                        let mut st = state.borrow_mut();
+                        st.busy = Busy::None;
+                        st.status = format!("Could not save OpenAI API key: {error}");
+                    }
+                    refresh_ui(&state.borrow(), &ui);
+                    ui.toast_overlay
+                        .add_toast(adw::Toast::new("Could not save API key"));
+                }
+            }
+            glib::ControlFlow::Break
+        }
+        Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+        Err(mpsc::TryRecvError::Disconnected) => {
+            {
+                let mut st = state.borrow_mut();
+                st.busy = Busy::None;
+                st.status = "Could not save OpenAI API key.".into();
+            }
+            refresh_ui(&state.borrow(), &ui);
+            glib::ControlFlow::Break
+        }
+    });
+}
+
+fn remove_api_key(state: Rc<RefCell<AppState>>, ui: Ui) {
+    {
+        let mut st = state.borrow_mut();
+        st.busy = Busy::SavingSettings;
+        st.status = "Removing saved OpenAI API key…".into();
+    }
+    refresh_ui(&state.borrow(), &ui);
+
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = settings::delete_openai_api_key().map_err(|error| error.to_string());
+        let _ = tx.send(result);
+    });
+
+    glib::timeout_add_local(Duration::from_millis(50), move || match rx.try_recv() {
+        Ok(result) => {
+            match result {
+                Ok(()) => {
+                    {
+                        let mut st = state.borrow_mut();
+                        st.busy = Busy::None;
+                        st.status = "Saved OpenAI API key removed.".into();
+                    }
+                    refresh_ui(&state.borrow(), &ui);
+                    ui.toast_overlay
+                        .add_toast(adw::Toast::new("OpenAI API key removed"));
+                }
+                Err(error) => {
+                    {
+                        let mut st = state.borrow_mut();
+                        st.busy = Busy::None;
+                        st.status = format!("Could not remove OpenAI API key: {error}");
+                    }
+                    refresh_ui(&state.borrow(), &ui);
+                    ui.toast_overlay
+                        .add_toast(adw::Toast::new("Could not remove API key"));
+                }
+            }
+            glib::ControlFlow::Break
+        }
+        Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+        Err(mpsc::TryRecvError::Disconnected) => {
+            {
+                let mut st = state.borrow_mut();
+                st.busy = Busy::None;
+                st.status = "Could not remove OpenAI API key.".into();
+            }
+            refresh_ui(&state.borrow(), &ui);
+            glib::ControlFlow::Break
+        }
+    });
 }
 
 fn start_scan(state: Rc<RefCell<AppState>>, ui: Ui) {
@@ -479,36 +691,47 @@ fn start_detection(state: Rc<RefCell<AppState>>, ui: Ui) {
 
     glib::timeout_add_local(Duration::from_millis(50), move || match rx.try_recv() {
         Ok(result) => {
-            let toast_text;
+            let needs_api_key = result.needs_api_key;
+            let toast_text = if needs_api_key {
+                "OpenAI API key required"
+            } else if result.warning.is_some() {
+                "Photo detection failed"
+            } else {
+                "Photos detected"
+            };
+
             {
                 let mut state = state.borrow_mut();
-                state.boxes = result.boxes;
-                state.selected = None;
-                state.selected_mode = None;
-                state.undo_stack.clear();
-                state.redo_stack.clear();
                 state.busy = Busy::None;
 
-                state.status = match result.warning {
+                match result.warning {
                     Some(warning) => {
-                        toast_text = "Photo detection failed";
-                        format!("{warning}")
+                        state.status = warning;
                     }
                     None => {
-                        toast_text = "Photos detected";
-                        format!(
+                        state.boxes = result.boxes;
+                        state.selected = None;
+                        state.selected_mode = None;
+                        state.undo_stack.clear();
+                        state.redo_stack.clear();
+                        state.status = format!(
                             "Detected {} photo{} with {}.",
                             state.boxes.len(),
                             if state.boxes.len() == 1 { "" } else { "s" },
                             result.engine
-                        )
+                        );
                     }
-                };
+                }
             }
 
             refresh_ui(&state.borrow(), &ui);
             ui.drawing.queue_draw();
             ui.toast_overlay.add_toast(adw::Toast::new(toast_text));
+
+            if needs_api_key {
+                show_api_key_dialog(state.clone(), ui.clone(), true);
+            }
+
             glib::ControlFlow::Break
         }
         Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
@@ -761,6 +984,7 @@ pub(super) fn refresh_ui(state: &AppState, ui: &Ui) {
     ui.fit_button.set_sensitive(
         state.image.is_some() && (state.zoom > 1.001 || state.pan.0.abs() > 0.5 || state.pan.1.abs() > 0.5),
     );
+    ui.api_key_button.set_sensitive(idle);
 
     let busy = state.busy != Busy::None;
     ui.spinner.set_visible(busy);
