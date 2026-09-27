@@ -1,4 +1,4 @@
-# Slicer
+# Scan Slicer
 
 A small desktop app for splitting a flatbed scan containing several physical photos into separate image files.
 
@@ -34,6 +34,36 @@ sudo pacman -S sane
 Scanning is optional; opening existing PNG/JPEG/TIFF files works without SANE.
 
 Photo detection requires an OpenAI API key. Use the key button in the header to enter one, or simply run detection: if no key is saved, Scan Slicer opens the setup dialog automatically. The dialog links directly to the OpenAI API key page, and the key is stored in the system keyring rather than an environment variable or the application binary.
+
+## Install release packages
+
+GitHub Releases provide three Linux package formats:
+
+- **Debian/Ubuntu:** `.deb`
+- **Arch Linux:** `.pkg.tar.zst`
+- **Portable:** `.AppImage`
+
+Examples:
+
+```bash
+sudo apt install ./scan-slicer_0.1.0_amd64.deb
+sudo pacman -U ./scan-slicer-0.1.0-1-x86_64.pkg.tar.zst
+chmod +x scan-slicer_0.1.0_x86_64.AppImage
+./scan-slicer_0.1.0_x86_64.AppImage
+```
+
+The native packages install the desktop launcher, scalable app icon and AppStream metadata, so Scan Slicer appears normally in the desktop application menu.
+
+## Creating a release
+
+Set the version in `Cargo.toml`, commit it, then push a matching `v*` tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The Packages workflow validates the desktop metadata and icon, builds all three package formats, creates the GitHub Release, uploads the packages and adds `SHA256SUMS`.
 
 ## Workflow
 
