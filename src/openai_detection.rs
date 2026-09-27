@@ -31,8 +31,11 @@ struct Point {
     y: f32,
 }
 
-pub fn detect_photos_openai(image: &DynamicImage, margin: u32) -> Result<Vec<PhotoRect>> {
-    let api_key = env::var("OPENAI_API_KEY").context("OPENAI_API_KEY is not set")?;
+pub fn detect_photos_openai(
+    image: &DynamicImage,
+    margin: u32,
+    api_key: &str,
+) -> Result<Vec<PhotoRect>> {
     let model = env::var("SCAN_SLICER_OPENAI_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.into());
 
     let preview = image.thumbnail(MAX_PREVIEW_DIM, MAX_PREVIEW_DIM).to_rgb8();
