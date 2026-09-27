@@ -229,10 +229,11 @@ fn show_api_key_dialog(state: Rc<RefCell<AppState>>, ui: Ui, retry_detection: bo
         });
     }
 
+    let response_api_key_entry = api_key_entry.clone();
     dialog.connect_response(move |dialog, response| {
         match response {
             gtk::ResponseType::Accept => {
-                let api_key = api_key_entry.text().trim().to_owned();
+                let api_key = response_api_key_entry.text().trim().to_owned();
                 if api_key.is_empty() {
                     return;
                 }
