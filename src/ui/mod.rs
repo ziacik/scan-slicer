@@ -31,6 +31,7 @@ struct Ui {
     undo_button: gtk::Button,
     redo_button: gtk::Button,
     fit_button: gtk::Button,
+    api_key_button: gtk::Button,
     spinner: gtk::Spinner,
     status_label: gtk::Label,
     zoom_label: gtk::Label,
@@ -72,6 +73,7 @@ fn build_ui(app: &adw::Application) {
     let undo_button = icon_button("edit-undo-symbolic", "Undo");
     let redo_button = icon_button("edit-redo-symbolic", "Redo");
     let fit_button = icon_button("zoom-fit-best-symbolic", "Fit image to window");
+    let api_key_button = icon_button("dialog-password-symbolic", "OpenAI API key");
     let export_button = gtk::Button::with_label("Export");
     export_button.add_css_class("suggested-action");
 
@@ -82,6 +84,7 @@ fn build_ui(app: &adw::Application) {
     header.pack_end(&fit_button);
     header.pack_end(&redo_button);
     header.pack_end(&undo_button);
+    header.pack_end(&api_key_button);
 
     let source_group = adw::PreferencesGroup::builder().title("Source").build();
     let source_row = adw::ActionRow::builder()
@@ -224,6 +227,7 @@ fn build_ui(app: &adw::Application) {
         undo_button,
         redo_button,
         fit_button,
+        api_key_button,
         spinner,
         status_label,
         zoom_label,
