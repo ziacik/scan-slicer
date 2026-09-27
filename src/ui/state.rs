@@ -21,6 +21,7 @@ pub(super) enum Busy {
     Scanning,
     Detecting,
     Exporting,
+    SavingSettings,
 }
 
 
