@@ -30,19 +30,44 @@ pub struct DetectionOutput {
     pub boxes: Vec<PhotoRect>,
     pub engine: &'static str,
     pub warning: Option<String>,
+    pub needs_api_key: bool,
 }
 
 pub fn detect_photos(image: &DynamicImage, margin: u32) -> DetectionOutput {
-    match crate::openai_detection::detect_photos_openai(image, margin) {
+    let api_key = match crate::settings::load_openai_api_key() {
+        Ok(Some(api_key)) => api_key,
+        Ok(None) => {
+            return DetectionOutput {
+                boxes: Vec::new(),
+                engine: "OpenAI vision",
+                warning: Some("An OpenAI API key is required for photo detection.".into()),
+                needs_api_key: true,
+            };
+        }
+        Err(error) => {
+            return DetectionOutput {
+                boxes: Vec::new(),
+                engine: "OpenAI vision",
+                warning: Some(format!(
+                    "Could not read the OpenAI API key from the system keyring: {error}"
+                )),
+                needs_api_key: false,
+            };
+        }
+    };
+
+    match crate::openai_detection::detect_photos_openai(image, margin, &api_key) {
         Ok(boxes) => DetectionOutput {
             boxes,
             engine: "OpenAI vision",
             warning: None,
+            needs_api_key: false,
         },
         Err(error) => DetectionOutput {
             boxes: Vec::new(),
             engine: "OpenAI vision",
             warning: Some(format!("Detection failed: {error}")),
+            needs_api_key: false,
         },
     }
 }
