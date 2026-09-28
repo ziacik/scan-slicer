@@ -1,0 +1,54 @@
+pkgname=scan-slicer
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='Split scanned photo sheets into individual images'
+arch=('x86_64')
+url='https://github.com/ziacik/scan-slicer'
+license=('MIT')
+options=('!debug')
+
+depends=(
+  'gtk4'
+  'libadwaita'
+  'hicolor-icon-theme'
+)
+
+makedepends=(
+  'cargo'
+)
+
+optdepends=(
+  'sane: scanner acquisition support'
+)
+
+source=(
+  "$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
+)
+
+sha256sums=(
+  '@SHA256@'
+)
+
+build() {
+  cd "$pkgname-$pkgver"
+  cargo build --release
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+
+  install -Dm755 target/release/scan-slicer \
+    "$pkgdir/usr/bin/scan-slicer"
+
+  install -Dm644 packaging/com.github.ziacik.ScanSlicer.desktop \
+    "$pkgdir/usr/share/applications/com.github.ziacik.ScanSlicer.desktop"
+
+  install -Dm644 packaging/com.github.ziacik.ScanSlicer.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/com.github.ziacik.ScanSlicer.svg"
+
+  install -Dm644 packaging/com.github.ziacik.ScanSlicer.metainfo.xml \
+    "$pkgdir/usr/share/metainfo/com.github.ziacik.ScanSlicer.metainfo.xml"
+
+  install -Dm644 LICENSE \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
