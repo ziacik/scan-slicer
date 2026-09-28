@@ -63,7 +63,14 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The Packages workflow validates the desktop metadata and icon, builds all three package formats, creates the GitHub Release, uploads the packages and adds `SHA256SUMS`.
+The Packages workflow validates the desktop metadata and icon, builds all three package formats, creates the GitHub Release, uploads the packages, adds `SHA256SUMS`, and updates the `scan-slicer` package in the AUR.
+
+AUR publishing needs one-time SSH setup:
+
+1. Create a dedicated SSH key and add its public key to your AUR account.
+2. Add the private key to this GitHub repository as an Actions secret named `AUR_SSH_PRIVATE_KEY`.
+
+After that, every matching release tag updates AUR automatically; there is no separate AUR release step.
 
 ## Workflow
 
